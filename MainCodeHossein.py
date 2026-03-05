@@ -10,9 +10,14 @@ def run_test():
     print(f"Detected Device: {device.upper()}")
     print(f"Torch Version: {torch.__version__}")
 
-    # 2. Setup Output Directory
-    exported_dir = os.environ.get('OUTPUT_DIR')
-    job_id = os.environ.get('SLURM_JOB_ID')
+    # 2. Setup Cache and Output Directory
+    torch_cache = os.path.expanduser("~/.cache/torch_models")
+    os.makedirs(torch_cache, exist_ok=True)
+    os.environ['TORCH_HOME'] = torch_cache
+
+    # --- FIX: Fetch Slurm variables from the environment ---
+    exported_dir = os.getenv('OUTPUT_DIR')
+    job_id = os.getenv('SLURM_JOB_ID')
 
     if exported_dir:
         output_dir = exported_dir
@@ -23,6 +28,8 @@ def run_test():
     else:
         output_dir = "."
         print(f"ℹ️ Info: No Slurm environment detected, saving to current directory.")
+    
+    os.makedirs(output_dir, exist_ok=True)
     
     # 3. Load Model
     print("\n🤖 Loading AudioGen-Medium...")
