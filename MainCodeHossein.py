@@ -1,4 +1,8 @@
 import os
+# --- NEW: Tell Transformers to ignore TensorFlow ---
+os.environ['USE_TF'] = '0'
+os.environ['USE_TORCH'] = '1'
+
 import torch
 import torchaudio
 from audiocraft.models import AudioGen
