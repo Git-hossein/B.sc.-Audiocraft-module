@@ -3,9 +3,9 @@ import sys
 
 # --- FORCE FIX START ---
 # 1. Hide TensorFlow so it stops bullying PyTorch
-os.environ['USE_TF'] = '0'
-os.environ['USE_TORCH'] = '1'
-sys.modules['tensorflow'] = None
+#os.environ['USE_TF'] = '0'
+#os.environ['USE_TORCH'] = '1'
+#sys.modules['tensorflow'] = None
 
 # 2. Tell the 'transformers' library to stop complaining and just work
 import transformers.utils.import_utils as import_utils
@@ -33,8 +33,7 @@ def run_test():
     
     try:
         print("\n🤖 Loading AudioGen-Medium...")
-        model = AudioGen.get_pretrained('facebook/audiogen-medium')
-        model.to(device)
+        model = AudioGen.get_pretrained('facebook/audiogen-medium', device=device)
         
         description = "A soft wind blowing through forest leaves"
         print(f"✨ Generating: '{description}'...")
