@@ -76,6 +76,6 @@ torch_cache/
 *.pth
 
 # Generated outputs
-*.wav
+assets/
 *.mp4
 audio_task.json
