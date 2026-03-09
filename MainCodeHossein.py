@@ -24,7 +24,7 @@ def copy_input_to_scratch():
     os.makedirs(scratch_path, exist_ok=True)
     
     # Use f-string to make sure the path is correct
-    os.system(f'cp -r /Hossein/input/* {scratch_path}') 
+    os.system(f'cp -r /home/sherkat/B.sc.-Audiocraft-module/Hossein/input/* {scratch_path}') 
     return scratch_path
 
 wav_input_folder_path = copy_input_to_scratch()
