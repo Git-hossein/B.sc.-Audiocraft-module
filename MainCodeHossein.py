@@ -120,7 +120,10 @@ def run_score_driven_process(data_dict, description, shift=0):
     seed = synced_mix.to(device)[..., :sr * 2]
     
     with torch.no_grad():
-        output = model.generate_continuation(seed, [description], prompt_sample_rate=sr)
+        output = model.generate_continuation(prompt=seed, 
+                                             descriptions=[description], 
+                                             prompt_sample_rate=sr,
+                                             progress=True)
     
     # 3. Save and Preview
 
