@@ -112,11 +112,11 @@ def run_score_driven_process(model, data_dict, description, shift=0):
     print(f"📁 Raw mix saved for comparison: {raw_mix_path}")
     
     # 2. AI Naturalizer
-    device = next(model.parameters()).device
+    device = next(model.model.parameters()).device
     
     print("✨ Re-synthesizing into a unified soundscape...")
     seed = synced_mix.to(device)[..., :sr * 2]
-    
+
     model.set_generation_params(duration=10.0, cfg_coeff=3.0)
     with torch.no_grad():
         output = model.generate_continuation(prompt=seed, 
