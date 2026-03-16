@@ -118,7 +118,7 @@ def run_score_driven_process(model, data_dict, description, shift=0):
     print("✨ Re-synthesizing into a unified soundscape...")
     seed = synced_mix.to(device)[..., :sr * 2]
 
-    model.set_generation_params(duration=10.0, cfg_coeff=3.0)
+    model.set_generation_params(duration=10.0, cfg_coef=3.0)
     with torch.no_grad():
         output = model.generate_continuation(prompt=seed, 
                                              descriptions=[description], 
