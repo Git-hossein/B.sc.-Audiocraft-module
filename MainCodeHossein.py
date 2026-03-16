@@ -90,7 +90,7 @@ def nudge_audio(waveform, shift_seconds, sr):
         return torch.nn.functional.pad(shifted, (0, total_len - shifted.shape[1]))
 
 # --- MODULE 3: THE MASTER EXECUTION ---
-def run_score_driven_process(data_dict, description, shift=0):
+def run_score_driven_process(model, data_dict, description, shift=0):
     # Extract the first video key and its audio results
     video_key = list(data_dict.keys())[0]
     video_id = os.path.splitext(video_key)[0]
@@ -112,14 +112,12 @@ def run_score_driven_process(data_dict, description, shift=0):
     print(f"📁 Raw mix saved for comparison: {raw_mix_path}")
     
     # 2. AI Naturalizer
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    print(f"🤖 Loading AudioGen on {device.upper()}...")
-    
-    model = AudioGen.get_pretrained('facebook/audiogen-medium', device=device)
+    device = next(model.parameters()).device
     
     print("✨ Re-synthesizing into a unified soundscape...")
     seed = synced_mix.to(device)[..., :sr * 2]
     
+    model.set_generation_params(duration=10.0, cfg_coeff=3.0)
     with torch.no_grad():
         output = model.generate_continuation(prompt=seed, 
                                              descriptions=[description], 
