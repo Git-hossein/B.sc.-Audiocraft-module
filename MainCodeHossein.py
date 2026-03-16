@@ -112,7 +112,8 @@ def run_score_driven_process(model, data_dict, description, shift=0):
     print(f"📁 Raw mix saved for comparison: {raw_mix_path}")
     
     # 2. AI Naturalizer
-    device = next(model.model.parameters()).device
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    print(f"🤖 Processing on: {device.upper()}")
     
     print("✨ Re-synthesizing into a unified soundscape...")
     seed = synced_mix.to(device)[..., :sr * 2]
