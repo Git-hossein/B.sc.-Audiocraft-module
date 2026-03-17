@@ -7,6 +7,8 @@ from audiocraft.models import AudioGen
 #  Tell the 'transformers' library to stop complaining and just work
 import transformers.utils.import_utils as import_utils
 import_utils._torch_available = True 
+import warnings
+from typing import Dict, List, Optional, Any
 
 
 # --- PATH & CACHE SETUP ---
@@ -90,48 +92,104 @@ def nudge_audio(waveform, shift_seconds, sr):
         return torch.nn.functional.pad(shifted, (0, total_len - shifted.shape[1]))
 
 # --- MODULE 3: THE MASTER EXECUTION ---
-def run_score_driven_process(model, data_dict, description, shift=0):
-    # Extract the first video key and its audio results
-    video_key = list(data_dict.keys())[0]
-    video_id = os.path.splitext(video_key)[0]
-    audio_results = data_dict[video_key]
-    folder_path = wav_input_folder_path
-    
-    print(f"🎬 Processing Video: {video_key}")
-    print(f"📊 Mixing {len(audio_results)} files based on Softmax scores...")
+def run_score_driven_process(
+        data_dict: Dict[str, Dict[str, float]], 
+        descriptions: List[str], 
+        shift: int = 0, 
+        shared_model: Optional[AudioGen] = None
+    )-> List[str]:
+    """
+    Processes a batch of video audio results by mixing them and re-synthesizing 
+    using AudioGen.
 
-    # 1. Mix and Sync
-    mixed_audio, sr = intelligent_weighted_mix(audio_results, folder_path)
-    synced_mix = nudge_audio(mixed_audio, shift, sr)
+    Args:
+        data_dict (Dict[str, Dict[str, float]]): A nested dictionary where keys are 
+            video filenames and values are dictionaries of inferred audio 
+            segments with their corresponding softmax scores.
+        descriptions (List[str]): A list of text descriptions/prompts for each 
+            video, ordered to match data_dict.keys().
+        shift (int, optional): Number of samples to shift/nudge the mixed audio 
+            for synchronization. Defaults to 0.
+        shared_model (Optional[AudioGen], optional): A pre-loaded AudioGen model 
+            instance. If None, the model is loaded locally. Defaults to None.
 
-    # --- SAVE THE RAW MIX FOR DEBUGGING ---
-    output_dir = os.getenv('OUTPUT_DIR', '.')
-    os.makedirs(output_dir, exist_ok=True)
-    raw_mix_path = os.path.join(output_dir, f"{video_id}_RAW_MIX.wav")
-    torchaudio.save(raw_mix_path, synced_mix.cpu(), sr)
-    print(f"📁 Raw mix saved for comparison: {raw_mix_path}")
-    
-    # 2. AI Naturalizer
+    Returns:
+        List[str]: A list of file paths to the successfully generated audio files.
+
+    Raises:
+        TypeError: If shared_model is provided but is not an AudioGen instance.
+        ValueError: If the number of descriptions does not match the number of videos.
+    """
+
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    print(f"🤖 Processing on: {device.upper()}")
-    
-    print("✨ Re-synthesizing into a unified soundscape...")
-    seed = synced_mix.to(device)[..., :sr * 2]
 
-    model.set_generation_params(duration=10.0, cfg_coef=3.0)
-    with torch.no_grad():
-        output = model.generate_continuation(prompt=seed, 
-                                             descriptions=[description], 
-                                             prompt_sample_rate=sr,
-                                             progress=True)
-    
-    # 3. Save and Preview
+    if shared_model is not None:
+        if not isinstance(shared_model, AudioGen):
+            raise TypeError(
+                f"❌ Invalid shared_model type: {type(shared_model)}. "
+                f"This function specifically requires audiogen-medium model to "
+                f"handle continuation prompts."
+            )
+        model = shared_model
+        print("Using verified shared AudioGen model...")
+    else:
+        warnings.warn("⚠️ No shared_model provided. Loading AudioGen-Medium locally.")
+        model = AudioGen.get_pretrained('facebook/audiogen-medium', device=device)
 
-    final_path = os.path.join(output_dir, f"{video_id}_GEN.wav")
-    torchaudio.save(final_path, output[0].cpu(), sr)
-    
-    print(f"✅ Success! Master file: {final_path}")
-    return final_path
+    generated_files = []
+
+    if len(descriptions) != len(data_dict):
+        raise ValueError(f"❌ Mismatch: {len(data_dict)} videos but {len(descriptions)} descriptions.")
+
+    for i, data in enumerate(zip (data_dict.keys(), descriptions)):
+        # Extract the video id and its audio results
+        description = data[1]
+        video = data[0]
+        video_id = os.path.splitext(video)[0]
+        audio_results = data_dict[video]
+        folder_path = wav_input_folder_path
+        
+        print(f"🎬 Processing Video: {video}")
+        print(f"📊 Mixing {len(audio_results)} files based on Softmax scores...")
+
+        # 1. Mix and Sync
+        mixed_audio, sr = intelligent_weighted_mix(audio_results, folder_path)
+        synced_mix = nudge_audio(mixed_audio, shift, sr)
+
+        # --- SAVE THE RAW MIX FOR DEBUGGING ---
+        output_dir = os.getenv('OUTPUT_DIR', '.')
+        os.makedirs(output_dir, exist_ok=True)
+        raw_mix_path = os.path.join(output_dir, f"{video_id}_RAW_MIX.wav")
+        torchaudio.save(raw_mix_path, synced_mix.cpu(), sr)
+        print(f"📁 Raw mix saved for comparison: {raw_mix_path}")
+        
+        # 2. AI Naturalizer
+
+        print(f"🤖 Processing on: {device.upper()}")
+        
+        print("✨ Re-synthesizing into a unified soundscape...")
+        seed = synced_mix.to(device)[..., :sr * 2]
+
+        model.set_generation_params(duration=10.0, cfg_coef=3.0)
+        with torch.no_grad():
+            output = model.generate_continuation(prompt=seed, 
+                                                descriptions=[description], 
+                                                prompt_sample_rate=sr,
+                                                progress=True)
+        
+        # 3. Save and Preview
+
+        final_path = os.path.join(output_dir, f"{video_id}_GEN.wav")
+        torchaudio.save(final_path, output[0].cpu(), sr)
+        
+        print(f"✅ Success! Master file: {final_path}")
+        generated_files.append(final_path)
+
+        # --- CLEANUP CACHE AFTER EACH VIDEO ---
+        if torch.cuda.is_available()and (i+ 1) % 10 ==0:
+            torch.cuda.empty_cache()
+
+    return generated_files
 
 # --- DATA FROM YOUR SEARCH ---
 search_results = {
@@ -163,9 +221,9 @@ if __name__ == "__main__":
 
     def get_description(youtube_id):
         # Look up the ID; if not found, use a safe default
-        return vgg_lookup.get(youtube_id, "natural environmental sound, high fidelity")
+        return vgg_lookup.get(youtube_id, None)
 
-    results = [
+    results = {
             {'--XInAaMS6k.npy': {'-C6cbmMaENE.npy': 0.6466576988106167,
                         '-8KFpJHyspw.npy': 0.14904139426690938,
                         '-03N_1zOM4E.npy': 0.10659110957951061,
@@ -235,7 +293,7 @@ if __name__ == "__main__":
                         '-0NxpZlO348.npy': 0.18478375634990274,
                         '-1EeNriiRN0.npy': 0.08553565561644937}}
 
-    ]
+    }
 
 # --- 3. LOAD MODEL ONCE ---
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -243,17 +301,15 @@ if __name__ == "__main__":
     shared_model = AudioGen.get_pretrained('facebook/audiogen-medium', device=device)
 
     # --- 4. EXECUTE LOOP ---
-    for result in results:
-        video_key = list(result.keys())[0]
-        video_id = os.path.splitext(video_key)[0] 
-        
-        # Get the real label from our dictionary
+    labels = []
+    for video in results.keys():
+        video_id = os.path.splitext(video)[0] 
         label = get_description(video_id)
-        print(f"🎯 Using Label: '{label}' for Video: {video_id}")
+        labels.append(label)
 
-        run_score_driven_process(
-            model=shared_model,
-            data_dict=result,
-            description=label,
-            shift=0 
-        )
+    run_score_driven_process(
+        data_dict=results,
+        descriptions=labels,
+        shift=0,
+        shared_model=shared_model
+    )
