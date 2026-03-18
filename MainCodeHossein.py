@@ -295,7 +295,11 @@ if __name__ == "__main__":
 
     }
 
-# --- 3. LOAD MODEL ONCE ---
+    # if u wanna use the json file: 
+    # with open("results.json", "r") as f:
+    #     results = json.load(f)
+
+    # --- 3. LOAD MODEL ONCE ---
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"🤖 Loading AudioGen-Medium into GPU memory...")
     shared_model = AudioGen.get_pretrained('facebook/audiogen-medium', device=device)
