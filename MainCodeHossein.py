@@ -297,7 +297,9 @@ if __name__ == "__main__":
     # }
 
     # if u wanna use the json file: 
-    with open("results.json", "r") as f:
+    audio_input_folder = "/home/sherkat/B.sc.-Audiocraft-module/Hossein/input/"
+    jason_file = "inferred.json"
+    with open(os.path.join(audio_input_folder, jason_file) , "r") as f:
         results = json.load(f)
 
     # --- 3. LOAD MODEL ONCE ---
