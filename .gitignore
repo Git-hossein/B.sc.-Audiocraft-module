@@ -78,4 +78,6 @@ torch_cache/
 # Generated outputs
 assets/
 *.mp4
-audio_task.json
+
+# local computer sent inputs
+Hossein/input/
