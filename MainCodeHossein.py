@@ -9,7 +9,7 @@ import transformers.utils.import_utils as import_utils
 import_utils._torch_available = True 
 import warnings
 import json
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Literal
 
 
 # --- PATH & CACHE SETUP ---
@@ -35,7 +35,7 @@ wav_input_folder_path = copy_input_to_scratch()
 
 
 # --- MODULE 1: THE SCORE-BASED MIXER ---
-def intelligent_weighted_mix(audio_data, folder_path, sr=16000):
+def intelligent_weighted_mix(audio_data, folder_path, sr=16000, weight_by: Literal["softmax_score", "cosine_sim"] = "softmax_score"):
     """
     audio_data: The dict of {filename: score}
     folder_path: Path to input waves
@@ -44,7 +44,7 @@ def intelligent_weighted_mix(audio_data, folder_path, sr=16000):
     final_mix = torch.zeros((1, target_samples))
 
     # We loop through the dictionary items directly
-    for filename, score in audio_data.items():
+    for filename, scores in audio_data.items():
         # Your dict has .npy, but the folder has .wav
         # We replace the extension to find the actual audio file
         actual_wav_name = str(filename).replace('.npy', '.wav')
@@ -71,7 +71,7 @@ def intelligent_weighted_mix(audio_data, folder_path, sr=16000):
         
         # Use the Similarity Score as the Weight
         # We multiply by a 'boost' factor (e.g., 100) if scores are very small
-        balanced_wf = (wf / energy) * score 
+        balanced_wf = (wf / energy) * scores[weight_by]
         
         final_mix += balanced_wf
 
@@ -96,6 +96,7 @@ def nudge_audio(waveform, shift_seconds, sr):
 def run_score_driven_process(
         data_dict: Dict[str, Dict[str, float]], 
         descriptions: List[str], 
+        weight_by: Literal["softmax_score", "cosine_sim"] = "softmax_score",
         shift: int = 0, 
         shared_model: Optional[AudioGen] = None
     )-> List[str]:
@@ -317,6 +318,7 @@ if __name__ == "__main__":
     run_score_driven_process(
         data_dict=results,
         descriptions=labels,
+        weight_by= "softmax_score",
         shift=0,
         shared_model=shared_model
     )
