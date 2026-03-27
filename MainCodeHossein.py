@@ -155,7 +155,7 @@ def run_score_driven_process(
         print(f"📊 Mixing {len(audio_results)} files based on Softmax scores...")
 
         # 1. Mix and Sync
-        mixed_audio, sr = intelligent_weighted_mix(audio_results, folder_path)
+        mixed_audio, sr = intelligent_weighted_mix(audio_results, folder_path, weight_by= weight_by)
         synced_mix = nudge_audio(mixed_audio, shift, sr)
 
         # --- SAVE THE RAW MIX FOR DEBUGGING ---
