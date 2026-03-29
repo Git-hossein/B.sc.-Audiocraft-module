@@ -9,7 +9,7 @@ import transformers.utils.import_utils as import_utils
 import_utils._torch_available = True 
 import warnings
 import json
-from typing import Dict, List, Optional, Any, Literal
+from typing import Optional, Any, Literal
 
 
 # --- PATH & CACHE SETUP ---
@@ -35,7 +35,7 @@ wav_input_folder_path = copy_input_to_scratch()
 
 
 # --- MODULE 1: THE SCORE-BASED MIXER ---
-def intelligent_weighted_mix(audio_data, folder_path, sr=16000, weight_by: Literal["softmax_score", "cosine_sim"] = "softmax_score"):
+def intelligent_weighted_mix(audio_data, folder_path, num_audio_mix, sr=16000, weight_by: Literal["softmax_score", "cosine_sim"] = "softmax_score"):
     """
     audio_data: The dict of {filename: score}
     folder_path: Path to input waves
@@ -44,7 +44,7 @@ def intelligent_weighted_mix(audio_data, folder_path, sr=16000, weight_by: Liter
     final_mix = torch.zeros((1, target_samples))
 
     # We loop through the dictionary items directly
-    for filename, scores in audio_data.items():
+    for filename, scores in list(audio_data.items())[:num_audio_mix]:
         # Your dict has .npy, but the folder has .wav
         # We replace the extension to find the actual audio file
         actual_wav_name = str(filename).replace('.npy', '.wav')
@@ -94,12 +94,15 @@ def nudge_audio(waveform, shift_seconds, sr):
 
 # --- MODULE 3: THE MASTER EXECUTION ---
 def run_score_driven_process(
-        data_dict: Dict[str, Dict[str, float]], 
-        descriptions: List[str], 
+        infered_dict: dict[str, dict[str, dict[str, float]]], 
+        descriptions: list[str], 
         weight_by: Literal["softmax_score", "cosine_sim"] = "softmax_score",
+        cfg_coef = 3.0, 
+        prompt_duration = 2, 
+        num_audio_mix: Optional[int] = None, 
         shift: int = 0, 
         shared_model: Optional[AudioGen] = None
-    )-> List[str]:
+    )-> list[str]:
     """
     Processes a batch of video audio results by mixing them and re-synthesizing 
     using AudioGen.
@@ -123,6 +126,8 @@ def run_score_driven_process(
         ValueError: If the number of descriptions does not match the number of videos.
     """
 
+    assert len(set([len(score) for score in infered_dict.values()])) == 1, "this inference dict is not homogounes!"
+
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     if shared_model is not None:
@@ -140,22 +145,23 @@ def run_score_driven_process(
 
     generated_files = []
 
-    if len(descriptions) != len(data_dict):
-        raise ValueError(f"❌ Mismatch: {len(data_dict)} videos but {len(descriptions)} descriptions.")
+    if len(descriptions) != len(infered_dict):
+        raise ValueError(f"❌ Mismatch: {len(infered_dict)} videos but {len(descriptions)} descriptions.")
 
-    for i, data in enumerate(zip (data_dict.keys(), descriptions)):
+    for i, data in enumerate(zip (infered_dict.keys(), descriptions)):
         # Extract the video id and its audio results
         description = data[1]
         video = data[0]
         video_id = os.path.splitext(video)[0]
-        audio_results = data_dict[video]
+        audio_results = infered_dict[video]
         folder_path = wav_input_folder_path
         
         print(f"🎬 Processing Video: {video}")
         print(f"📊 Mixing {len(audio_results)} files based on Softmax scores...")
 
         # 1. Mix and Sync
-        mixed_audio, sr = intelligent_weighted_mix(audio_results, folder_path, weight_by= weight_by)
+        k = min(len(audio_results), num_audio_mix) if num_audio_mix is not None else len(audio_results)
+        mixed_audio, sr = intelligent_weighted_mix(audio_results, folder_path, num_audio_mix = k ,weight_by= weight_by)
         synced_mix = nudge_audio(mixed_audio, shift, sr)
 
         # --- SAVE THE RAW MIX FOR DEBUGGING ---
@@ -170,9 +176,9 @@ def run_score_driven_process(
         print(f"🤖 Processing on: {device.upper()}")
         
         print("✨ Re-synthesizing into a unified soundscape...")
-        seed = synced_mix.to(device)[..., :sr * 2]
+        seed = synced_mix.to(device)[..., :sr * prompt_duration]
 
-        model.set_generation_params(duration=10.0, cfg_coef=3.0)
+        model.set_generation_params(duration=10.0, cfg_coef= cfg_coef if description is not None else 0.0)
         with torch.no_grad():
             output = model.generate_continuation(prompt=seed, 
                                                 descriptions=[description], 
@@ -193,14 +199,14 @@ def run_score_driven_process(
 
     return generated_files
 
-# --- DATA FROM YOUR SEARCH ---
-search_results = {
-    '-0gYWIOfqdM.npy': 
-                  {'-0gYWIOfqdM.npy': 0.0011361405039085842,
-                     '-4yCSY_5Zns.npy': 0.0011282989163786462,
-                     '-D7Od7iYq0A.npy': 0.0011058588558776564,
-                     '-A-xb-P-WxQ.npy': 0.001097940577780496,
-                     '-HtBJbsbeHo.npy': 0.001087154364469816}}
+# --- DATA FROM YOUR SEARCH --- OUTDATE!!!!!!!
+# search_results = {
+#     '-0gYWIOfqdM.npy': 
+#                   {'-0gYWIOfqdM.npy': 0.0011361405039085842,
+#                      '-4yCSY_5Zns.npy': 0.0011282989163786462,
+#                      '-D7Od7iYq0A.npy': 0.0011058588558776564,
+#                      '-A-xb-P-WxQ.npy': 0.001097940577780496,
+#                      '-HtBJbsbeHo.npy': 0.001087154364469816}}
 
 
 
@@ -225,78 +231,6 @@ if __name__ == "__main__":
         # Look up the ID; if not found, use a safe default
         return vgg_lookup.get(youtube_id, None)
 
-    # results = {
-    #         '--XInAaMS6k.npy': {'-C6cbmMaENE.npy': 0.6466576988106167,
-    #                     '-8KFpJHyspw.npy': 0.14904139426690938,
-    #                     '-03N_1zOM4E.npy': 0.10659110957951061,
-    #                     '-KQ7U3gS1wQ.npy': 0.05174921559957428,
-    #                     '-HWoFxKmyyo.npy': 0.04596058174338897}
-    # ,
-
-
-
-    # '-0gYWIOfqdM.npy': {'-0gYWIOfqdM.npy': 0.6202382082358212,
-    #                     '-4yCSY_5Zns.npy': 0.31029253698116976,
-    #                     '-D7Od7iYq0A.npy': 0.04162212451171154,
-    #                     '-A-xb-P-WxQ.npy': 0.02028793443981568,
-    #                     '-HtBJbsbeHo.npy': 0.0075591958314815974}
-    # ,
-
-
-
-    # '-3M-k4nIYIM.npy': {'-9whJW7BUSU.npy': 0.3196014880596852,
-    #                     '-HxQ9AoyRmY.npy': 0.24735819844202067,
-    #                     '-60vY5Xw1qE.npy': 0.15602753270196487,
-    #                     '-9vw5ZzChT0.npy': 0.14684911321636024,
-    #                     '-3MNphBfq_0.npy': 0.13016366757996897}
-    # ,
-
-
-
-    # '-4ItJ9yTz_c.npy': {'-AioliAg12U.npy': 0.5865218525077042,
-    #                     '-NPu34as_OY.npy': 0.18724029723388622,
-    #                     '-6ZEGCtBKqs.npy': 0.10033209712998142,
-    #                     '-Gbohom8C4Q.npy': 0.08084076879787816,
-    #                     '-62pV95k9O0.npy': 0.045064984330550145}
-    # ,
-
-
-
-    # '-4o0jRbgHr4.npy': {'-NPu34as_OY.npy': 0.7716207865103134,
-    #                     '-CexapzRAPQ.npy': 0.1304685089335117,
-    #                     '-4o0jRbgHr4.npy': 0.05299553586319041,
-    #                     '-9wRxzJ5j_Y.npy': 0.022736311823520462,
-    #                     '-C8JU6yTJ40.npy': 0.022178856869464036}
-    # ,
-
-
-
-    # '-4rdRn-FRXo.npy': {'-Kc9P729mqM.npy': 0.36042281765518974,
-    #                     '-7XYw1VrN64.npy': 0.33141335961690443,
-    #                     '-MNP_aM09S8.npy': 0.1580765973593134,
-    #                     '-CCbu3r-1pc.npy': 0.0915348425868341,
-    #                     '-JdUSVmQq88.npy': 0.058552382781758214}
-    # ,
-
-
-
-    # '-6lkiUAf_cQ.npy': {'-6lkiUAf_cQ.npy': 0.7625829829950478,
-    #                     '-ECRgvDx4xc.npy': 0.11362292998877925,
-    #                     '-3xhrOw45ss.npy': 0.0643086250163537,
-    #                     '-2JomCd5zzY.npy': 0.038541489457014064,
-    #                     '-FfFD4bbCEI.npy': 0.020943972542805226}
-    # ,
-
-
-
-    # '-6VFTlZsft4.npy': {'-AltV1ftMk8.npy': 0.31224017893390565,
-    #                     '-EWyYYBHsbQ.npy': 0.2170137781686798,
-    #                     '-CcGuq0yoKo.npy': 0.20042663093106244,
-    #                     '-0NxpZlO348.npy': 0.18478375634990274,
-    #                     '-1EeNriiRN0.npy': 0.08553565561644937}
-
-    # }
-
     # if u wanna use the json file: 
     audio_input_folder = "/home/sherkat/B.sc.-Audiocraft-module/Hossein/input/"
     jason_file = "inferred.json"
@@ -316,9 +250,12 @@ if __name__ == "__main__":
         labels.append(label)
 
     run_score_driven_process(
-        data_dict=results,
+        infered_dict=results,
         descriptions=labels,
         weight_by= "softmax_score",
+        cfg_coef = 3.0, 
+        prompt_duration = 2, 
+        num_audio_mix = 5, 
         shift=0,
         shared_model=shared_model
     )
