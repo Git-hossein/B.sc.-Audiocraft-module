@@ -10,6 +10,7 @@ import_utils._torch_available = True
 import warnings
 import json
 from typing import Optional, Any, Literal
+import shutil
 
 
 # --- PATH & CACHE SETUP ---
@@ -18,20 +19,36 @@ torch_cache = os.path.expanduser("~/.cache/torch_models")
 os.makedirs(torch_cache, exist_ok=True)
 os.environ['TORCH_HOME'] = torch_cache
 
-def copy_input_to_scratch():
+
+def get_scratch_path():
     slurm_job_id = os.environ.get('SLURM_JOB_ID') 
 
     if not slurm_job_id:
         raise RuntimeError("job not correctly started")
-    
+
     scratch_path = f'/scratch/{slurm_job_id}/'
     os.makedirs(scratch_path, exist_ok=True)
-    
-    # Use f-string to make sure the path is correct
-    os.system(f'cp -r /home/sherkat/B.sc.-Audiocraft-module/Hossein/input/* {scratch_path}') 
+
     return scratch_path
 
-wav_input_folder_path = copy_input_to_scratch()
+wav_input_folder_path = get_scratch_path()
+
+def copy_input_to_scratch(inferred_dict, source_folder = "/home/sherkat/B.sc.-Audiocraft-module/Hossein/input/"):
+
+    needed_files = set()
+    for mix_list in inferred_dict.values():
+        for filename in mix_list.keys():
+            needed_files.add(filename.replace('.npy', '.wav'))
+
+    scratch_path = wav_input_folder_path
+    
+    # Use f-string to make sure the path is correct
+    for f in needed_files:
+        try:
+            shutil.copy(os.path.join(source_folder, f), scratch_path)
+        except Exception as e:
+            print(f"something went wrong while copying to scratch: {e}")
+
 
 
 # --- MODULE 1: THE SCORE-BASED MIXER ---
@@ -101,7 +118,8 @@ def run_score_driven_process(
         prompt_duration = 2, 
         num_audio_mix: Optional[int] = None, 
         shift: int = 0, 
-        shared_model: Optional[AudioGen] = None
+        shared_model: Optional[AudioGen] = None,
+        batch_size = 4
     )-> list[str]:
     """
     Processes a batch of video audio results by mixing them and re-synthesizing 
@@ -147,66 +165,78 @@ def run_score_driven_process(
 
     if len(descriptions) != len(infered_dict):
         raise ValueError(f"❌ Mismatch: {len(infered_dict)} videos but {len(descriptions)} descriptions.")
+    
 
-    for i, data in enumerate(zip (infered_dict.keys(), descriptions)):
-        # Extract the video id and its audio results
-        description = data[1]
-        video = data[0]
-        video_id = os.path.splitext(video)[0]
-        audio_results = infered_dict[video]
+    inferred_dict_keys = list(infered_dict.keys())
+    for i in range(0, len(inferred_dict_keys), batch_size):
+
+        batch_keys = inferred_dict_keys[i: i+batch_size]
+        batch_descriptions = descriptions[i: i+batch_size]
+        batch_seeds = []
+        batch_video_ids = []
         folder_path = wav_input_folder_path
-        
-        print(f"🎬 Processing Video: {video}")
-        print(f"📊 Mixing {len(audio_results)} files based on Softmax scores...")
 
-        # 1. Mix and Sync
-        k = min(len(audio_results), num_audio_mix) if num_audio_mix is not None else len(audio_results)
-        mixed_audio, sr = intelligent_weighted_mix(audio_results, folder_path, num_audio_mix = k ,weight_by= weight_by)
-        synced_mix = nudge_audio(mixed_audio, shift, sr)
+        for video in batch_keys:
+            # Extract the video id and its audio results
+            video_id = os.path.splitext(video)[0]
+            batch_video_ids.append(video_id)
+            audio_results = infered_dict[video]
+            print(f"🎬 Processing Video: {video}")
+            print(f"📊 Mixing {len(audio_results)} files based on Softmax scores...")
+            
+            # 1. Mix and Sync
+            k = min(len(audio_results), num_audio_mix) if num_audio_mix is not None else len(audio_results)
+            mixed_audio, sr = intelligent_weighted_mix(audio_results, folder_path, num_audio_mix = k ,weight_by= weight_by)
+            synced_mix = nudge_audio(mixed_audio, shift, sr)
+            batch_seeds.append(synced_mix)
 
-        # --- SAVE THE RAW MIX FOR DEBUGGING ---
-        output_dir = os.getenv('OUTPUT_DIR', '.')
-        os.makedirs(output_dir, exist_ok=True)
-        raw_mix_path = os.path.join(output_dir, f"{video_id}_RAW_MIX.wav")
-        torchaudio.save(raw_mix_path, synced_mix.cpu(), sr)
-        print(f"📁 Raw mix saved for comparison: {raw_mix_path}")
-        
+            # --- SAVE THE RAW MIX FOR DEBUGGING ---
+            output_dir = os.getenv('OUTPUT_DIR', '.')
+            os.makedirs(output_dir, exist_ok=True)
+            raw_mix_path = os.path.join(output_dir, f"{video_id}_RAW_MIX.wav")
+            torchaudio.save(raw_mix_path, synced_mix.cpu(), sr)
+            print(f"📁 Raw mix saved for comparison: {raw_mix_path}")
+                
+        seeds_tensor = torch.stack(batch_seeds).to(device)
         # 2. AI Naturalizer
 
         print(f"🤖 Processing on: {device.upper()}")
         
         print("✨ Re-synthesizing into a unified soundscape...")
-        seed = synced_mix.to(device)[..., :sr * prompt_duration]
-
-        model.set_generation_params(duration=10.0, cfg_coef= cfg_coef if description is not None else 0.0)
+        seeds_tensor = seeds_tensor[..., :sr * prompt_duration]
+        active_cfg = cfg_coef if any(d != None for d in batch_descriptions) else 0.0
+        model.set_generation_params(duration=10.0, cfg_coef= active_cfg)
         with torch.no_grad():
-            output = model.generate_continuation(prompt=seed, 
-                                                descriptions=[description], 
+            output_batch = model.generate_continuation(prompt=seeds_tensor, 
+                                                descriptions=batch_descriptions, 
                                                 prompt_sample_rate=sr,
                                                 progress=True)
         
         # 3. Save and Preview
+        for j, output_audio in enumerate(output_batch):
+                    video_id = batch_video_ids[j]
+                    final_path = os.path.join(output_dir, f"{video_id}_GEN.wav")
+                    
+                    # output_audio is already the specific tensor for this video
+                    torchaudio.save(final_path, output_audio.cpu(), sr)
+                    
+                    print(f"✅ Success! Master file: {final_path}")
+                    generated_files.append(final_path)
 
-        final_path = os.path.join(output_dir, f"{video_id}_GEN.wav")
-        torchaudio.save(final_path, output[0].cpu(), sr)
-        
-        print(f"✅ Success! Master file: {final_path}")
-        generated_files.append(final_path)
-
-        # --- CLEANUP CACHE AFTER EACH VIDEO ---
-        if torch.cuda.is_available()and (i+ 1) % 10 ==0:
+            # --- CLEANUP CACHE AFTER 5 BATCHES---
+        if torch.cuda.is_available()and (i // batch_size + 1) % 5 == 0:
             torch.cuda.empty_cache()
 
     return generated_files
 
-# --- DATA FROM YOUR SEARCH --- OUTDATE!!!!!!!
+# inferred dict example
 # search_results = {
 #     '-0gYWIOfqdM.npy': 
-#                   {'-0gYWIOfqdM.npy': 0.0011361405039085842,
-#                      '-4yCSY_5Zns.npy': 0.0011282989163786462,
-#                      '-D7Od7iYq0A.npy': 0.0011058588558776564,
-#                      '-A-xb-P-WxQ.npy': 0.001097940577780496,
-#                      '-HtBJbsbeHo.npy': 0.001087154364469816}}
+#                   {'-0gYWIOfqdM.npy': {'softmax_score':0.32, 'cosine_sim': 0.01},
+#                      '-4yCSY_5Zns.npy': {'softmax_score':0.12, 'cosine_sim': 0.005},
+#                      '-D7Od7iYq0A.npy': {'softmax_score':0.3222, 'cosine_sim': 0.03},
+#                      '-A-xb-P-WxQ.npy': {'softmax_score':0.001, 'cosine_sim': 0.012},
+#                      '-HtBJbsbeHo.npy': {'softmax_score':0.0201, 'cosine_sim': 0.0111}}}
 
 
 
@@ -233,10 +263,11 @@ if __name__ == "__main__":
 
     # if u wanna use the json file: 
     audio_input_folder = "/home/sherkat/B.sc.-Audiocraft-module/Hossein/input/"
-    jason_file = "inferred.json"
-    with open(os.path.join(audio_input_folder, jason_file) , "r") as f:
+    inferred_dict_json_file = "inferred.json"
+    with open(os.path.join(audio_input_folder, inferred_dict_json_file) , "r") as f:
         results = json.load(f)
 
+    copy_input_to_scratch(results)
     # --- 3. LOAD MODEL ONCE ---
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"🤖 Loading AudioGen-Medium into GPU memory...")
