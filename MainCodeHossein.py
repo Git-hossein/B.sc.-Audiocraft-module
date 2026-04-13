@@ -22,17 +22,27 @@ os.environ['TORCH_HOME'] = torch_cache
 
 
 def get_scratch_path():
-    job_id = os.environ.get('SLURM_ARRAY_JOB_ID')
-    task_id = os.environ.get('SLURM_ARRAY_TASK_ID')
-
-    if not job_id or not task_id:
-        raise RuntimeError("job not correctly started")
-
     scratch_path = os.environ.get('OUTPUT_DIR')
-
-    os.makedirs(scratch_path, exist_ok=True)
-
-    return scratch_path
+    print(f"DEBUG: OUTPUT_DIR from env = {scratch_path}")
+    print(f"DEBUG: Current user = {os.getuid()}:{os.getgid()}")
+    print(f"DEBUG: Current working dir = {os.getcwd()}")
+    
+    if not scratch_path:
+        raise RuntimeError("OUTPUT_DIR environment variable is not set!")
+    
+    try:
+        os.makedirs(scratch_path, exist_ok=True)
+        print(f"DEBUG: Successfully created/accessed scratch dir: {scratch_path}")
+        return scratch_path
+    except Exception as e:
+        print(f"ERROR creating scratch dir {scratch_path}: {type(e).__name__}: {e}")
+        # Try to see permissions
+        parent = os.path.dirname(scratch_path)
+        if os.path.exists(parent):
+            print(f"Parent {parent} exists, permissions: {oct(os.stat(parent).st_mode)}")
+        if os.path.exists(scratch_path):
+            print(f"Directory already exists, owner UID:GID = {os.stat(scratch_path).st_uid}:{os.stat(scratch_path).st_gid}")
+        raise
 
 
 def copy_input_to_scratch(inferred_dict, scratch_path ,source_folder = "/home/sherkat/B.sc.-Audiocraft-module/Hossein/input/"):
