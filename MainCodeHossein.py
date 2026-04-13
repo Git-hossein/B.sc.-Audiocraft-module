@@ -28,7 +28,8 @@ def get_scratch_path():
     if not job_id or not task_id:
         raise RuntimeError("job not correctly started")
 
-    scratch_path = os.environ.get('OUTPUT_DIR')
+    job_id = os.environ.get('SLURM_JOB_ID')
+    scratch_path = f'/scratch/{job_id}'
 
     os.makedirs(scratch_path, exist_ok=True)
 
