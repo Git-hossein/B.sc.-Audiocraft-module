@@ -18,7 +18,7 @@ IMAGE="/home/sherkat/singularity_build/audiogen_sandbox"
 BASE_RESULT_DIR=~/audio_outputs
 
 # --- 2. Setup Environment ---
-export OUTPUT_DIR="/scratch/${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}"
+export OUTPUT_DIR="/scratch/${SLURM_JOB_ID}"
 mkdir -p $OUTPUT_DIR
 
 # --- 3. Execute Script inside Singularity ---
