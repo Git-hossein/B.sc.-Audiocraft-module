@@ -29,6 +29,8 @@ def get_scratch_path():
         raise RuntimeError("job not correctly started")
 
     scratch_path = f'/scratch/{job_id}_{task_id}/'
+    if scratch_path != os.environ.get('OUTPUT_DIR'):
+        raise Exception(f"something went wrong because {scratch_path}!= {os.environ.get('OUTPUT_DIR')}")
     os.makedirs(scratch_path, exist_ok=True)
 
     return scratch_path
