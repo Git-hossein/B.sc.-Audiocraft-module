@@ -23,7 +23,7 @@ mkdir -p $OUTPUT_DIR
 
 # --- 3. Execute Script inside Singularity ---
 # Removed 'source' because libraries are now INSIDE the .simg
-singularity exec --nv $IMAGE bash -c "
+singularity exec --nv --bind /scratch:/scratch $IMAGE bash -c "
     cd $PROJECT_ROOT && \
     nvidia-smi && \
     python3 -u MainCodeHossein.py \
