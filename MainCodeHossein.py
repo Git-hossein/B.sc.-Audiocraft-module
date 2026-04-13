@@ -11,6 +11,7 @@ import warnings
 import json
 from typing import Optional, Any, Literal
 import shutil
+import argparse
 
 
 # --- PATH & CACHE SETUP ---
@@ -21,26 +22,24 @@ os.environ['TORCH_HOME'] = torch_cache
 
 
 def get_scratch_path():
-    slurm_job_id = os.environ.get('SLURM_JOB_ID') 
+    job_id = os.environ.get('SLURM_ARRAY_JOB_ID')
+    task_id = os.environ.get('SLURM_ARRAY_TASK_ID')
 
-    if not slurm_job_id:
+    if not job_id or not task_id:
         raise RuntimeError("job not correctly started")
 
-    scratch_path = f'/scratch/{slurm_job_id}/'
+    scratch_path = f'/scratch/{job_id}_{task_id}/'
     os.makedirs(scratch_path, exist_ok=True)
 
     return scratch_path
 
-wav_input_folder_path = get_scratch_path()
 
-def copy_input_to_scratch(inferred_dict, source_folder = "/home/sherkat/B.sc.-Audiocraft-module/Hossein/input/"):
+def copy_input_to_scratch(inferred_dict, scratch_path ,source_folder = "/home/sherkat/B.sc.-Audiocraft-module/Hossein/input/"):
 
     needed_files = set()
     for mix_list in inferred_dict.values():
         for filename in mix_list.keys():
             needed_files.add(filename.replace('.npy', '.wav'))
-
-    scratch_path = wav_input_folder_path
     
     # Use f-string to make sure the path is correct
     for f in needed_files:
@@ -174,7 +173,7 @@ def run_score_driven_process(
         batch_descriptions = descriptions[i: i+batch_size]
         batch_seeds = []
         batch_video_ids = []
-        folder_path = wav_input_folder_path
+        folder_path = get_scratch_path()
 
         for video in batch_keys:
             # Extract the video id and its audio results
@@ -223,9 +222,6 @@ def run_score_driven_process(
                     print(f"✅ Success! Master file: {final_path}")
                     generated_files.append(final_path)
 
-            # --- CLEANUP CACHE AFTER 5 BATCHES---
-        if torch.cuda.is_available()and (i // batch_size + 1) % 5 == 0:
-            torch.cuda.empty_cache()
 
     return generated_files
 
@@ -243,50 +239,82 @@ def run_score_driven_process(
 
 if __name__ == "__main__":
 
-# --- 1. PRE-LOAD THE DESCRIPTIONS ---
-    print("📖 Loading VGGSound descriptions into memory...")
-    vgg_lookup = {}
-    try:
-        with open("vggsound.csv", newline='', mode="r") as f: # Ensure the filename is correct
-            reader = csv.reader(f)
-            for row in reader:
-                # row[0] = ID, row[2] = Label, row[3] = train/test
-                if row[3] == "train":
-                    vgg_lookup[row[0].strip()] = row[2].strip()
-    except FileNotFoundError:
-        print("❌ Error: 'vggsound.csv' not found. Check your PROJECT_ROOT.")
+
+# 1. SET UP ARGUMENT PARSING
+
+    parser = argparse.ArgumentParser(description="Parallel AudioGen Worker")
+    parser.add_argument("--session_id", type=str, required=True, help="The unique ID for this batch run")
+    parser.add_argument("--chunk_id", type=int, required=True, help="The specific chunk index this node handles")
+    args = parser.parse_args()
+
+# 2. CONSTRUCT PATHS   
+    # This is the base folder where your local dispatcher uploaded everything
+    base_input_dir = "/home/sherkat/B.sc.-Audiocraft-module/Hossein/input/"
+    session_dir = os.path.join(base_input_dir, args.session_id)
+    chunk_file = os.path.join(session_dir, f"chunk_{args.chunk_id}.json")
+    config_file = os.path.join(session_dir, "config.json")
+
+# 3. LOAD CONFIG & CHUNK
+    print(f"📂 Task {args.chunk_id}: Loading session {args.session_id}")
+    
+    with open(config_file, "r") as f:
+        conf = json.load(f)
+    
+    with open(chunk_file, "r") as f:
+        chunk_data = json.load(f)
+
+
+
+    copy_input_to_scratch(chunk_data, get_scratch_path(), source_folder=base_input_dir)
+
+# 5. LOAD DESCRIPTIONS (VGG-Sound)
+
+    def load_vggsound():
+        print("📖 Loading VGGSound descriptions into memory...")
         vgg_lookup = {}
+        try:
+            with open("vggsound.csv", newline='', mode="r") as f: # Ensure the filename is correct
+                reader = csv.reader(f)
+                for row in reader:
+                    # row[0] = ID, row[2] = Label, row[3] = train/test
+                    vgg_lookup[row[0].strip()] = row[2].strip()
+        except FileNotFoundError:
+            print("❌ Error: 'vggsound.csv' not found. Check your PROJECT_ROOT.")
+            vgg_lookup = {}
+        return vgg_lookup
+    
 
-    def get_description(youtube_id):
+    def get_description(youtube_id, vgg_lookup_dict):
         # Look up the ID; if not found, use a safe default
-        return vgg_lookup.get(youtube_id, None)
+        return vgg_lookup_dict.get(youtube_id, None)
 
-    # if u wanna use the json file: 
-    audio_input_folder = "/home/sherkat/B.sc.-Audiocraft-module/Hossein/input/"
-    inferred_dict_json_file = "inferred.json"
-    with open(os.path.join(audio_input_folder, inferred_dict_json_file) , "r") as f:
-        results = json.load(f)
+    vggsound_lookup = load_vggsound()
 
-    copy_input_to_scratch(results)
+    labels = []
+    for video in chunk_data.keys():
+        video_id = os.path.splitext(video)[0] 
+        label = get_description(video_id, vggsound_lookup)
+        labels.append(label)
+
     # --- 3. LOAD MODEL ONCE ---
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"🤖 Loading AudioGen-Medium into GPU memory...")
     shared_model = AudioGen.get_pretrained('facebook/audiogen-medium', device=device)
 
-    # --- 4. EXECUTE LOOP ---
-    labels = []
-    for video in results.keys():
-        video_id = os.path.splitext(video)[0] 
-        label = get_description(video_id)
-        labels.append(label)
+    gpu_name = torch.cuda.get_device_name(0)
+    if "1080 Ti" in gpu_name or "2080 Ti" in gpu_name:
+        batch_size = 2
+    else:
+        batch_size = 4
 
     run_score_driven_process(
-        infered_dict=results,
+        infered_dict=chunk_data,
         descriptions=labels,
-        weight_by= "softmax_score",
-        cfg_coef = 3.0, 
-        prompt_duration = 2, 
-        num_audio_mix = 5, 
-        shift=0,
-        shared_model=shared_model
+        weight_by= conf.get("weight_by", "softmax_score"),
+        cfg_coef = conf.get("cfg_coef", 3.0), 
+        prompt_duration = conf.get("prompt_duration", 2), 
+        num_audio_mix = conf.get("num_audio_mix", 5), 
+        shift=conf.get("shift", 0),
+        shared_model=shared_model,
+        batch_size = batch_size
     )

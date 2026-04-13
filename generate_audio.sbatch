@@ -1,22 +1,24 @@
 #!/bin/bash
-#SBATCH --job-name=AudioGen_Sherkat
+#SBATCH --job-name=AudioGen_Array_Sherkat
 #SBATCH --partition=day
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
-#SBATCH --time=00:30:00
-#SBATCH --error=job.%J.err
-#SBATCH --output=job.%J.out
-#SBATCH --mail-type=END,FAIL
-#SBATCH --mail-user=your.name@student.uni-tuebingen.de
+#SBATCH --time=06:30:00
+#SBATCH --array=0-0
+#SBATCH --error=job.%A_%a.err    # %A is Job ID, %a is Task Index
+#SBATCH --output=job.%A_%a.out
+#SBATCH --mail-type=FAIL         # Only mail on failure to avoid spamming 32 emails
+#SBATCH --mail-user=hossein.sherkat@student.uni-tuebingen.de
 
 # --- 1. Define Paths ---
 PROJECT_ROOT="/home/sherkat/B.sc.-Audiocraft-module"
 # POINT TO YOUR NEW CUSTOM IMAGE HERE
 IMAGE="/home/sherkat/singularity_build/audiogen_sandbox"
+BASE_RESULT_DIR=~/audio_outputs
 
 # --- 2. Setup Environment ---
-export OUTPUT_DIR="/scratch/$SLURM_JOB_ID"
+export OUTPUT_DIR="/scratch/${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}"
 mkdir -p $OUTPUT_DIR
 
 # --- 3. Execute Script inside Singularity ---
@@ -24,33 +26,29 @@ mkdir -p $OUTPUT_DIR
 singularity exec --nv $IMAGE bash -c "
     cd $PROJECT_ROOT && \
     nvidia-smi && \
-    python3 -u MainCodeHossein.py
+    python3 -u MainCodeHossein.py \
+            --session_id $SESSION_ID \
+            --chunk_id $SLURM_ARRAY_TASK_ID
 "
 
-# --- 4. Move results back to Home ---
+# --- 4. Move results back to a Task-Specific folder  ---
 echo "Moving results from scratch to home..."
-DEST_DIR=~/audio_outputs
-readonly DEST_DIR
-rm -rf "$DEST_DIR"
-mkdir -p "$DEST_DIR"
+TASK_DEST_DIR="$BASE_RESULT_DIR/${SESSION_ID}/task_${SLURM_ARRAY_TASK_ID}"
+readonly TASK_DEST_DIR
+rm -rf "$TASK_DEST_DIR"
+mkdir -p "$TASK_DEST_DIR"
 
-# Check if there are actually any .wav files before moving
-# We use -- to signal the end of command options in case files start with -
+# This prevents different tasks from overwriting each other's results
 if ls $OUTPUT_DIR/*_GEN.wav $OUTPUT_DIR/*_RAW_MIX.wav >/dev/null 2>&1; then
     
-    # Move files AND check both operations
-    if mv -- "$OUTPUT_DIR"/*_GEN.wav "$DEST_DIR/" \
-       && mv -- "$OUTPUT_DIR"/*_RAW_MIX.wav "$DEST_DIR/"; then
+    mv -- "$OUTPUT_DIR"/*_GEN.wav "$TASK_DEST_DIR/"
+    mv -- "$OUTPUT_DIR"/*_RAW_MIX.wav "$TASK_DEST_DIR/"
         
-        touch "$DEST_DIR/JOB_${SLURM_JOB_ID}_DONE"
-        echo "... Sentinel file created..."
-
-        echo "✅ Success! Raw mix and Master mix moved to $DEST_DIR"
-        ls -lh "$DEST_DIR"
+# Create a unique sentinel file for this specific task
+    touch "$BASE_RESULT_DIR/${SESSION_ID}/DONE_${SLURM_ARRAY_TASK_ID}"
+    echo "✅ Task $SLURM_ARRAY_TASK_ID Complete."
     
-    else
-        echo "⚠️ Move failed, not creating sentinel."
-    fi
 else
-    echo "❌ Error: No matching audio files (_GEN.wav or _RAW_MIX.wav) found in scratch."
+    echo "❌ Error: No audio files found for Task $SLURM_ARRAY_TASK_ID"
+    exit 1
 fi
