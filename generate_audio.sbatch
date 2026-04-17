@@ -8,7 +8,7 @@
 #SBATCH --array=0-0
 #SBATCH --error=job.%A_%a.err    # %A is Job ID, %a is Task Index
 #SBATCH --output=job.%A_%a.out
-#SBATCH --mail-type=FAIL         # Only mail on failure to avoid spamming 32 emails
+#SBATCH --mail-type=BEGIN,END,FAIL         # Only mail on failure to avoid spamming 32 emails
 #SBATCH --mail-user=hossein.sherkat@student.uni-tuebingen.de
 
 # --- 1. Define Paths ---
