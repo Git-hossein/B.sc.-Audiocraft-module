@@ -4,7 +4,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
-#SBATCH --time=08:30:00
+#SBATCH --time=10:30:00
 #SBATCH --array=0-0
 #SBATCH --error=job.%A_%a.err    # %A is Job ID, %a is Task Index
 #SBATCH --output=job.%A_%a.out
