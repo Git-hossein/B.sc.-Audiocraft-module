@@ -14,6 +14,10 @@ import shutil
 import argparse
 
 
+"""
+for audio continuation
+"""
+
 # --- PATH & CACHE SETUP ---
 # Ensure the model doesn't re-download every job
 torch_cache = os.path.expanduser("~/.cache/torch_models")
@@ -292,11 +296,14 @@ if __name__ == "__main__":
 
     vggsound_lookup = load_vggsound()
 
-    labels = []
-    for video in chunk_data.keys():
-        video_id = os.path.splitext(video)[0] 
-        label = get_description(video_id, vggsound_lookup)
-        labels.append(label)
+    if conf.get("with_text_descr") == True:
+        labels = []
+        for video in chunk_data.keys():
+            video_id = os.path.splitext(video)[0] 
+            label = get_description(video_id, vggsound_lookup)
+            labels.append(label)
+    else:
+        labels = [None]*len(chunk_data)
 
     # --- 3. LOAD MODEL ONCE ---
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
