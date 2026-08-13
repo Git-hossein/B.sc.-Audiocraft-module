@@ -9,61 +9,60 @@ from diffusers import AudioLDM2Pipeline
 
 
 # --- MODULE 1: THE SCORE-BASED MIXER ---
-# --- MODULE: SCORE-BASED MIXER ---
-def intelligent_weighted_mix(audio_data, folder_path, num_audio_mix=3, sr=16000, weight_by="softmax_score"):
+def intelligent_weighted_mix(
+    audio_data: dict, 
+    folder_path: str, 
+    num_audio_mix: int = 3, 
+    sr: int = 16000, 
+    weight_by: Literal["softmax_score", "cosine_sim"] = "softmax_score"
+):
+    """
+    audio_data: The dict of {filename: score}
+    folder_path: Path to input waves
+    """
     target_samples = 10 * sr
     final_mix = torch.zeros((1, target_samples))
 
+    # We loop through the dictionary items directly
     for filename, scores in list(audio_data.items())[:num_audio_mix]:
         actual_wav_name = str(filename).replace('.npy', '.wav')
         path = os.path.join(folder_path, actual_wav_name)
         
         if not os.path.exists(path):
-            print(f"⚠️ Warning: {actual_wav_name} not found. Skipping.")
+            print(f"⚠️ Warning: {actual_wav_name} not found in folder. Skipping.")
             continue
 
-        # Load audio using soundfile backend or scipy fallback
-        try:
-            wf, orig_sr = torchaudio.load(path, backend="soundfile")
-        except Exception:
-            # Scipy fallback if torchaudio backend dispatch fails
-            orig_sr, data = scipy.io.wavfile.read(path)
-            data_tensor = torch.from_numpy(data).float()
-            if data.dtype == 'int16':
-                data_tensor = data_tensor / 32768.0
-            elif data.dtype == 'int32':
-                data_tensor = data_tensor / 2147483648.0
-            
-            wf = data_tensor.unsqueeze(0) if data_tensor.ndim == 1 else data_tensor.T
-
-        # Mono conversion
+        # Force backend="soundfile" to prevent torchaudio 2.5+ from routing to torchcodec
+        wf, orig_sr = torchaudio.load(path, backend="soundfile")
+        
+        # Ensure mono channel
         if wf.shape[0] > 1:
             wf = torch.mean(wf, dim=0, keepdim=True)
 
         # Standardize Sample Rate
         if orig_sr != sr:
+            print(f"🔄 Resampling {actual_wav_name}")
             wf = T.Resample(orig_sr, sr)(wf)
         
-        # Ensure exactly 10s duration
+        # Ensure 10s length
         wf = wf[:, :target_samples]
         if wf.shape[1] < target_samples:
             wf = torch.nn.functional.pad(wf, (0, target_samples - wf.shape[1]))
-
-        # Remove DC offset
-        wf = wf - torch.mean(wf)
             
         # Volume Balancing (RMS)
         energy = torch.sqrt(torch.mean(wf**2)) + 1e-8
+        
+        # Use the Similarity Score as the Weight
         score = scores[weight_by] if isinstance(scores, dict) else float(scores)
         balanced_wf = (wf / energy) * score
         
         final_mix += balanced_wf
 
-    # Peak Normalization
+    # Peak Normalization to make it audible and prevent clipping
     max_val = torch.max(torch.abs(final_mix))
     if max_val > 0:
         final_mix = final_mix / (max_val + 1e-8)
-        
+
     return final_mix, sr
 
 # --- MODULE: AUDIOLDM 2 INFERENCE ENGINE ---
@@ -165,7 +164,7 @@ if __name__ == "__main__":
 
     # Save RAW mix for reference
     raw_path = os.path.join(output_folder, f"{video_id}_RAW_MIX.wav")
-    torchaudio.save(raw_path, mixed_wf.cpu(), sr)
+    torchaudio.save(raw_path, mixed_wf.cpu(), sr, backend = "soundfile")
     print(f"📁 Raw mix saved to scratch: {raw_path}")
 
     # 3. Load AudioLDM 2 Model
@@ -193,5 +192,6 @@ if __name__ == "__main__":
 
     # 5. Save final generated wav result
     out_path = os.path.join(output_folder, f"{video_id}_GEN.wav")
-    scipy.io.wavfile.write(out_path, rate=sr, data=generated_audio)
+    gen_tensor = torch.from_numpy(generated_audio).unsqueeze(0) 
+    torchaudio.save(out_path, gen_tensor, sr, backend="soundfile")
     print(f"✅ Success! Generated master file saved to scratch: {out_path}")
