@@ -1,13 +1,57 @@
 import os
 import sys
+from typing import Literal
 import torch
+import torchaudio.transforms as T
 import torchaudio
 import scipy.io.wavfile
 from diffusers import AudioLDM2Pipeline
 
-# Import your mixer from MainCodeHossein
-from MainCodeHossein import intelligent_weighted_mix
 
+# --- MODULE 1: THE SCORE-BASED MIXER ---
+def intelligent_weighted_mix(audio_data, folder_path, num_audio_mix, sr=16000, weight_by: Literal["softmax_score", "cosine_sim"] = "softmax_score"):
+    """
+    audio_data: The dict of {filename: score}
+    folder_path: Path to input waves
+    """
+    target_samples = 10 * sr
+    final_mix = torch.zeros((1, target_samples))
+
+    # We loop through the dictionary items directly
+    for filename, scores in list(audio_data.items())[:num_audio_mix]:
+        # Your dict has .npy, but the folder has .wav
+        # We replace the extension to find the actual audio file
+        actual_wav_name = str(filename).replace('.npy', '.wav')
+        path = os.path.join(folder_path, actual_wav_name)
+        
+        if not os.path.exists(path):
+            print(f"⚠️ Warning: {actual_wav_name} not found in folder. Skipping.")
+            continue
+
+        wf, orig_sr = torchaudio.load(path)
+        
+        # Standardize Sample Rate
+        if orig_sr != sr:
+            print(f"🔄 Resampling {actual_wav_name}")
+            wf = T.Resample(orig_sr, sr)(wf)
+        
+        # Ensure 10s length
+        wf = wf[:, :target_samples]
+        if wf.shape[1] < target_samples:
+            wf = torch.nn.functional.pad(wf, (0, target_samples - wf.shape[1]))
+            
+        # Volume Balancing (RMS)
+        energy = torch.sqrt(torch.mean(wf**2)) + 1e-8
+        
+        # Use the Similarity Score as the Weight
+        # We multiply by a 'boost' factor (e.g., 100) if scores are very small
+        balanced_wf = (wf / energy) * scores[weight_by]
+        
+        final_mix += balanced_wf
+
+    # Peak Normalization to make it audible and prevent clipping
+    final_mix = final_mix / (torch.max(torch.abs(final_mix)) + 1e-8)
+    return final_mix, sr
 
 # --- MODULE: AUDIOLDM 2 INFERENCE ENGINE ---
 def run_audioldm2_inference(
