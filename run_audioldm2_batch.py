@@ -3,8 +3,7 @@ import sys
 from typing import Literal
 import torch
 import torchaudio.transforms as T
-import torchaudio
-import scipy.io.wavfile
+import soundfile as sf
 from diffusers import AudioLDM2Pipeline
 
 
@@ -32,8 +31,15 @@ def intelligent_weighted_mix(
             print(f"⚠️ Warning: {actual_wav_name} not found in folder. Skipping.")
             continue
 
-        # Force backend="soundfile" to prevent torchaudio 2.5+ from routing to torchcodec
-        wf, orig_sr = torchaudio.load(path, backend="soundfile")
+        # Direct soundfile read (bypasses Torchaudio backend dispatcher completely)
+        data, orig_sr = sf.read(path)
+        wf = torch.from_numpy(data).float()
+        
+        # Format to 2D Tensor [channels, samples]
+        if wf.ndim == 1:
+            wf = wf.unsqueeze(0)
+        else:
+            wf = wf.T
         
         # Ensure mono channel
         if wf.shape[0] > 1:
@@ -64,6 +70,7 @@ def intelligent_weighted_mix(
         final_mix = final_mix / (max_val + 1e-8)
 
     return final_mix, sr
+
 
 # --- MODULE: AUDIOLDM 2 INFERENCE ENGINE ---
 def run_audioldm2_inference(
@@ -137,7 +144,6 @@ if __name__ == "__main__":
                      '1nZWM7d70Vk.npy': {'softmax_score': 0.08894357085227966,
                                          'cosine_sim': 0.17140518128871918}}}
 
-
     # Dynamic environment configuration
     input_folder = "/home/sherkat/B.sc.-Audiocraft-module/Hossein/input/"
     output_folder = os.environ.get("OUTPUT_DIR", "./test_outputs")
@@ -162,9 +168,9 @@ if __name__ == "__main__":
         weight_by="softmax_score"
     )
 
-    # Save RAW mix for reference
+    # Save RAW mix using soundfile directly
     raw_path = os.path.join(output_folder, f"{video_id}_RAW_MIX.wav")
-    torchaudio.save(raw_path, mixed_wf.cpu(), sr, backend = "soundfile")
+    sf.write(raw_path, mixed_wf.squeeze().cpu().numpy(), sr)
     print(f"📁 Raw mix saved to scratch: {raw_path}")
 
     # 3. Load AudioLDM 2 Model
@@ -190,8 +196,7 @@ if __name__ == "__main__":
         device=device
     )
 
-    # 5. Save final generated wav result
+    # 5. Save final generated wav result using soundfile directly
     out_path = os.path.join(output_folder, f"{video_id}_GEN.wav")
-    gen_tensor = torch.from_numpy(generated_audio).unsqueeze(0) 
-    torchaudio.save(out_path, gen_tensor, sr, backend="soundfile")
+    sf.write(out_path, generated_audio, sr)
     print(f"✅ Success! Generated master file saved to scratch: {out_path}")
