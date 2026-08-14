@@ -142,8 +142,8 @@ def run_audioldm2_audio2audio(
             noise_pred = pipe.unet(
                 latent_model_input,
                 t,
-                encoder_hidden_states=prompt_embeds,
-                encoder_hidden_states_1=gen_prompt_embeds,
+                encoder_hidden_states=gen_prompt_embeds,
+                encoder_hidden_states_1=prompt_embeds,
                 encoder_attention_mask_1=prompt_mask,
                 return_dict=False,
             )[0]
