@@ -12,7 +12,7 @@ def intelligent_weighted_mix(
     audio_data: dict, 
     folder_path: str, 
     num_audio_mix: int = 3, 
-    sr: int = 16000, 
+    sr: int = 48000, 
     weight_by: Literal["softmax_score", "cosine_sim"] = "softmax_score"
 ):
     """
@@ -81,7 +81,7 @@ def run_audioldm2_inference(
     strength: float = 0.5,
     num_inference_steps: int = 200,
     guidance_scale: float = 3.5,
-    sr: int = 16000,
+    sr: int = 48000,
     device: str = "cuda"
 ):
     """
@@ -164,7 +164,7 @@ if __name__ == "__main__":
         audio_data=candidates_dict,
         folder_path=input_folder,
         num_audio_mix=3,
-        sr=16000,
+        sr=48000,
         weight_by="softmax_score"
     )
 
