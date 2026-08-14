@@ -101,6 +101,7 @@ def run_audioldm2_audio2audio(
         prompt_embeds, prompt_mask, gen_prompt_embeds = pipe.encode_prompt(
             prompt=text_prompt,
             device=device,
+            num_waveforms_per_prompt=1,
             do_classifier_free_guidance=(guidance_scale > 1.0),
             negative_prompt=negative_prompt,
         )
