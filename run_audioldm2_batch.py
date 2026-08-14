@@ -7,6 +7,16 @@ import soundfile as sf
 from diffusers import AudioLDM2Pipeline
 
 
+# --- MONKEY PATCH FOR TRANSFORMERS / AUDIOLDM2 COMPATIBILITY ---
+from transformers.generation.utils import GenerationMixin
+from transformers.models.gpt2.modeling_gpt2 import GPT2Model
+
+if not hasattr(GPT2Model, "_update_model_kwargs_for_generation"):
+    GPT2Model._update_model_kwargs_for_generation = GenerationMixin._update_model_kwargs_for_generation
+if not hasattr(GPT2Model, "_extract_past_from_model_output"):
+    GPT2Model._extract_past_from_model_output = GenerationMixin._extract_past_from_model_output
+
+
 # --- MODULE 1: THE SCORE-BASED MIXER ---
 def intelligent_weighted_mix(
     audio_data: dict, 
