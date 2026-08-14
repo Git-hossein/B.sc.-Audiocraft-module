@@ -159,9 +159,11 @@ def run_audioldm2_audio2audio(
         # 6. Decode latents to Mel-spectrogram & Vocode to Waveform
         latents = latents / pipe.vae.config.scaling_factor
         mel_spectrogram = pipe.vae.decode(latents).sample
-        audio = pipe.vocoder(mel_spectrogram)
+        # Squeeze singleton dimensions to [batch, time, channels]
+        while mel_spectrogram.dim() > 3:
+            mel_spectrogram = mel_spectrogram.squeeze(1)
 
-        # Post-process to 1D float array
+        audio = pipe.vocoder(mel_spectrogram)
         audio = audio.squeeze().cpu().float().numpy()
 
     return audio
