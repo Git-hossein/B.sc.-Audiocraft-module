@@ -7,15 +7,18 @@ import soundfile as sf
 from diffusers import AudioLDM2Pipeline
 
 
-# --- MONKEY PATCH FOR TRANSFORMERS / AUDIOLDM2 COMPATIBILITY ---
-from transformers.generation.utils import GenerationMixin
 from transformers.models.gpt2.modeling_gpt2 import GPT2Model
 
-if not hasattr(GPT2Model, "_update_model_kwargs_for_generation"):
-    GPT2Model._update_model_kwargs_for_generation = GenerationMixin._update_model_kwargs_for_generation
-if not hasattr(GPT2Model, "_extract_past_from_model_output"):
-    GPT2Model._extract_past_from_model_output = GenerationMixin._extract_past_from_model_output
+def _patch_update_model_kwargs_for_generation(self, outputs, model_kwargs, *args, **kwargs):
+    model_kwargs["past_key_values"] = getattr(outputs, "past_key_values", None)
+    if "attention_mask" in model_kwargs and model_kwargs["attention_mask"] is not None:
+        mask = model_kwargs["attention_mask"]
+        model_kwargs["attention_mask"] = torch.cat(
+            [mask, mask.new_ones((mask.shape[0], 1))], dim=-1
+        )
+    return model_kwargs
 
+GPT2Model._update_model_kwargs_for_generation = _patch_update_model_kwargs_for_generation
 
 # --- MODULE 1: THE SCORE-BASED MIXER ---
 def intelligent_weighted_mix(
