@@ -113,15 +113,12 @@ def intelligent_weighted_mix(
             wf = torch.nn.functional.pad(wf, (0, target_samples - wf.shape[1]))
             
         energy = torch.sqrt(torch.mean(wf**2)) + 1e-8
-        score = scores[weight_by] if isinstance(scores, dict) else float(scores)
-        balanced_wf = (wf / energy) * score
+        weight = max(0.0, float(scores[weight_by]))
+        balanced_wf = (wf / energy) * weight
         
         final_mix += balanced_wf
 
-    max_val = torch.max(torch.abs(final_mix))
-    if max_val > 0:
-        final_mix = final_mix / (max_val + 1e-8)
-
+    final_mix = final_mix / (torch.max(torch.abs(final_mix)) + 1e-8)
     return final_mix, sr
 
 
