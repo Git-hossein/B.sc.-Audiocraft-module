@@ -15,18 +15,22 @@
 PROJECT_ROOT="/home/sherkat/B.sc.-Audiocraft-module"
 # POINT TO YOUR NEW CUSTOM IMAGE HERE
 IMAGE="/home/sherkat/singularity_build/audiogen_sandbox"
-BASE_RESULT_DIR=~/audio_outputs
+BASE_RESULT_DIR=~/audiogen_outputs
 
 # --- 2. Setup Environment ---
-export OUTPUT_DIR="/scratch/${SLURM_JOB_ID}"
+SCRATCH_DIR="/scratch/${SLURM_JOB_ID}"
+export OUTPUT_DIR="$SCRATCH_DIR/output"
 mkdir -p $OUTPUT_DIR
+
+# Guaranteed cleanup on exit (normal, error, or killed)
+trap 'echo "Removing scratch folder $SCRATCH_DIR"; rm -rf "$SCRATCH_DIR"' EXIT
 
 # --- 3. Execute Script inside Singularity ---
 # Removed 'source' because libraries are now INSIDE the .simg
 singularity exec --nv --bind /scratch:/scratch $IMAGE bash -c "
     cd $PROJECT_ROOT && \
     nvidia-smi && \
-    python3 -u MainCodeHossein2.py \
+    python3 -u run_audiogen_generation.py \
             --session_id $SESSION_ID \
             --chunk_id $SLURM_ARRAY_TASK_ID
 "
@@ -44,11 +48,6 @@ if ls $OUTPUT_DIR/*_GEN.wav >/dev/null 2>&1; then
     # Move the required GEN files
     mv -- "$OUTPUT_DIR"/*_GEN.wav "$TASK_DEST_DIR/"
     
-    # 2. Check for and move OPTIONAL RAW_MIX files
-    if ls $OUTPUT_DIR/*_RAW_MIX.wav >/dev/null 2>&1; then
-        echo "Found optional RAW_MIX files, moving them..."
-        mv -- "$OUTPUT_DIR"/*_RAW_MIX.wav "$TASK_DEST_DIR/"
-    fi
         
     # Create the sentinel file (only if GEN files were successful)
     touch "$BASE_RESULT_DIR/${SESSION_ID}/DONE_${SLURM_ARRAY_TASK_ID}"

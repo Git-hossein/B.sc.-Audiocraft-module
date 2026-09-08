@@ -75,6 +75,8 @@ def run_parallel_generation(
 
     generated_files = []
 
+    output_dir = os.getenv('OUTPUT_DIR', '.')
+    os.makedirs(output_dir, exist_ok=True)
 
     for i in range(0, len(vid_list), batch_size):
 
@@ -82,8 +84,6 @@ def run_parallel_generation(
         batch_descriptions = descriptions[i: i+batch_size]
         batch_vids = vid_list[i: i+batch_size]
         batch_video_ids = []
-        output_dir = os.getenv('OUTPUT_DIR', '.')
-        os.makedirs(output_dir, exist_ok=True)
 
         for video in batch_vids:
             # Extract the video id and its audio results
@@ -115,14 +115,6 @@ def run_parallel_generation(
 
     return generated_files
 
-# inferred dict example
-# search_results = {
-#     '-0gYWIOfqdM.npy': 
-#                   {'-0gYWIOfqdM.npy': {'softmax_score':0.32, 'cosine_sim': 0.01},
-#                      '-4yCSY_5Zns.npy': {'softmax_score':0.12, 'cosine_sim': 0.005},
-#                      '-D7Od7iYq0A.npy': {'softmax_score':0.3222, 'cosine_sim': 0.03},
-#                      '-A-xb-P-WxQ.npy': {'softmax_score':0.001, 'cosine_sim': 0.012},
-#                      '-HtBJbsbeHo.npy': {'softmax_score':0.0201, 'cosine_sim': 0.0111}}}
 
 
 
