@@ -25,19 +25,19 @@ os.makedirs(torch_cache, exist_ok=True)
 os.environ['TORCH_HOME'] = torch_cache
 
 
-def get_scratch_path():
-    job_id = os.environ.get('SLURM_ARRAY_JOB_ID')
-    task_id = os.environ.get('SLURM_ARRAY_TASK_ID')
+def get_scratch_input_path():
+    job_id = os.environ.get("SLURM_ARRAY_JOB_ID")
+    task_id = os.environ.get("SLURM_ARRAY_TASK_ID")
 
     if not job_id or not task_id:
         raise RuntimeError("job not correctly started")
 
-    job_id = os.environ.get('SLURM_JOB_ID')
-    scratch_path = f'/scratch/{job_id}'
 
-    os.makedirs(scratch_path, exist_ok=True)
+    scratch_input_path = os.environ.get('INPUT_DIR')
 
-    return scratch_path
+    os.makedirs(scratch_input_path, exist_ok=True)
+
+    return scratch_input_path
 
 
 def copy_input_to_scratch(inferred_dict, scratch_path ,source_folder = "/home/sherkat/B.sc.-Audiocraft-module/Hossein/input/"):
@@ -93,7 +93,8 @@ def intelligent_weighted_mix(audio_data, folder_path, num_audio_mix, sr=16000, w
         
         # Use the Similarity Score as the Weight
         # We multiply by a 'boost' factor (e.g., 100) if scores are very small
-        balanced_wf = (wf / energy) * scores[weight_by]
+        weight = max(0.0, float(scores[weight_by]))
+        balanced_wf = (wf / energy) * weight
         
         final_mix += balanced_wf
 
@@ -103,7 +104,7 @@ def intelligent_weighted_mix(audio_data, folder_path, num_audio_mix, sr=16000, w
 
 # --- MODULE 2: THE ALIGNER ---
 def nudge_audio(waveform, shift_seconds, sr):
-    samples_to_shift = int(shift_seconds * sr)
+    samples_to_shift = int(round(shift_seconds * sr))
     total_len = waveform.shape[1]
     
     if samples_to_shift > 0: 
@@ -122,7 +123,7 @@ def run_score_driven_process(
         cfg_coef = 3.0, 
         prompt_duration = 2, 
         num_audio_mix: Optional[int] = None, 
-        shift: int = 0, 
+        shift: float = 0.0, 
         shared_model: Optional[AudioGen] = None,
         batch_size = 4
     )-> list[str]:
@@ -171,7 +172,7 @@ def run_score_driven_process(
     if len(descriptions) != len(infered_dict):
         raise ValueError(f"❌ Mismatch: {len(infered_dict)} videos but {len(descriptions)} descriptions.")
     
-
+    folder_path = get_scratch_input_path()
     inferred_dict_keys = list(infered_dict.keys())
     for i in range(0, len(inferred_dict_keys), batch_size):
 
@@ -179,7 +180,6 @@ def run_score_driven_process(
         batch_descriptions = descriptions[i: i+batch_size]
         batch_seeds = []
         batch_video_ids = []
-        folder_path = get_scratch_path()
 
         for video in batch_keys:
             # Extract the video id and its audio results
@@ -271,7 +271,7 @@ if __name__ == "__main__":
 
 
 
-    copy_input_to_scratch(chunk_data, get_scratch_path(), source_folder=base_input_dir)
+    copy_input_to_scratch(chunk_data, get_scratch_input_path(), source_folder=base_input_dir)
 
 # 5. LOAD DESCRIPTIONS (VGG-Sound)
 
@@ -323,7 +323,7 @@ if __name__ == "__main__":
         cfg_coef = conf.get("cfg_coef", 3.0), 
         prompt_duration = conf.get("prompt_duration", 2), 
         num_audio_mix = conf.get("num_audio_mix", 5), 
-        shift=conf.get("shift", 0),
+        shift=conf.get("shift", 0.0),
         shared_model=shared_model,
         batch_size = batch_size
     )

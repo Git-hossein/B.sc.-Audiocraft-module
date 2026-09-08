@@ -6,8 +6,8 @@
 #SBATCH --mem=16G
 #SBATCH --time=10:30:00
 #SBATCH --array=0-0
-#SBATCH --error=job.%A_%a.err    # %A is Job ID, %a is Task Index
-#SBATCH --output=job.%A_%a.out
+#SBATCH --error=job.audiogen_continuation.%A_%a.err    # %A is Job ID, %a is Task Index
+#SBATCH --output=job.audiogen_continuation.%A_%a.out
 #SBATCH --mail-type=BEGIN,END,FAIL         # Only mail on failure to avoid spamming 32 emails
 #SBATCH --mail-user=hossein.sherkat@student.uni-tuebingen.de
 
@@ -15,11 +15,17 @@
 PROJECT_ROOT="/home/sherkat/B.sc.-Audiocraft-module"
 # POINT TO YOUR NEW CUSTOM IMAGE HERE
 IMAGE="/home/sherkat/singularity_build/audiogen_sandbox"
-BASE_RESULT_DIR=~/audio_outputs
+BASE_RESULT_DIR=~/audiogen_outputs
 
 # --- 2. Setup Environment ---
-export OUTPUT_DIR="/scratch/${SLURM_JOB_ID}"
+SCRATCH_DIR="/scratch/${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}"
+export INPUT_DIR="$SCRATCH_DIR/input"
+export OUTPUT_DIR="$SCRATCH_DIR/output"
 mkdir -p $OUTPUT_DIR
+
+
+# Guaranteed cleanup on exit (normal, error, or killed)
+trap 'echo "Removing scratch folder $SCRATCH_DIR"; rm -rf "$SCRATCH_DIR"' EXIT
 
 # --- 3. Execute Script inside Singularity ---
 # Removed 'source' because libraries are now INSIDE the .simg
