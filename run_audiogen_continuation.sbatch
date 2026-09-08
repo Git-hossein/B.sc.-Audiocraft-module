@@ -32,7 +32,7 @@ trap 'echo "Removing scratch folder $SCRATCH_DIR"; rm -rf "$SCRATCH_DIR"' EXIT
 singularity exec --nv --bind /scratch:/scratch $IMAGE bash -c "
     cd $PROJECT_ROOT && \
     nvidia-smi && \
-    python3 -u MainCodeHossein.py \
+    python3 -u run_audiogen_continuation.py \
             --session_id $SESSION_ID \
             --chunk_id $SLURM_ARRAY_TASK_ID
 "
