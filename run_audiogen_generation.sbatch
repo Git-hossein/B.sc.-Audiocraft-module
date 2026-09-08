@@ -6,8 +6,8 @@
 #SBATCH --mem=16G
 #SBATCH --time=10:30:00
 #SBATCH --array=0-0
-#SBATCH --error=job.%A_%a.err    # %A is Job ID, %a is Task Index
-#SBATCH --output=job.%A_%a.out
+#SBATCH --error=job.audiogen_generation.%A_%a.err    # %A is Job ID, %a is Task Index
+#SBATCH --output=job.audiogen_generation.%A_%a.out
 #SBATCH --mail-type=BEGIN,END,FAIL         # Only mail on failure to avoid spamming 32 emails
 #SBATCH --mail-user=hossein.sherkat@student.uni-tuebingen.de
 
