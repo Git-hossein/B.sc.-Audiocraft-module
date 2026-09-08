@@ -26,10 +26,9 @@ os.environ['TORCH_HOME'] = torch_cache
 
 
 def get_scratch_input_path():
-    job_id = os.environ.get("SLURM_ARRAY_JOB_ID")
-    task_id = os.environ.get("SLURM_ARRAY_TASK_ID")
+    job_id = os.environ.get("SLURM_JOB_ID")
 
-    if not job_id or not task_id:
+    if not job_id:
         raise RuntimeError("job not correctly started")
 
 

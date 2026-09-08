@@ -18,9 +18,10 @@ IMAGE="/home/sherkat/singularity_build/audiogen_sandbox"
 BASE_RESULT_DIR=~/audiogen_outputs
 
 # --- 2. Setup Environment ---
-SCRATCH_DIR="/scratch/${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}"
+SCRATCH_DIR="/scratch/${SLURM_JOB_ID}"
 export INPUT_DIR="$SCRATCH_DIR/input"
 export OUTPUT_DIR="$SCRATCH_DIR/output"
+mkdir -p $INPUT_DIR
 mkdir -p $OUTPUT_DIR
 
 
