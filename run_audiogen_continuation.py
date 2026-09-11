@@ -51,7 +51,7 @@ def copy_input_to_scratch(inferred_dict, scratch_path ,source_folder = "/home/sh
         try:
             shutil.copy(os.path.join(source_folder, f), scratch_path)
         except Exception as e:
-            print(f"something went wrong while copying to scratch: {e}")
+            raise RuntimeError(f"something went wrong while copying to scratch: {e}") from e
 
 
 
@@ -76,6 +76,11 @@ def intelligent_weighted_mix(audio_data, folder_path, num_audio_mix, sr=16000, w
             continue
 
         wf, orig_sr = torchaudio.load(path)
+
+        # Downmix to mono by averaging the channel dimension (dim=0)
+        if wf.shape[0] > 1:
+            print("⚠️Warning: downmixing to mono, this shouldn't occur as the audios should already be downmixed!!")
+            wf = torch.mean(wf, dim=0, keepdim=True)
         
         # Standardize Sample Rate
         if orig_sr != sr:
