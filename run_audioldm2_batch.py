@@ -27,18 +27,18 @@ GPT2Model._update_model_kwargs_for_generation = _patch_update_model_kwargs_for_g
 
 
 # --- HELPER: ISOLATED SCRATCH DIRECTORY ---
-def get_scratch_path(chunk_id: Optional[int] = None) -> str:
-    """
-    Returns an isolated scratch directory per SLURM job & array task
-    to prevent collision when multiple tasks share a physical node.
-    """
-    job_id = os.environ.get("SLURM_ARRAY_JOB_ID") or os.environ.get("SLURM_JOB_ID", "local_job")
-    task_id = os.environ.get("SLURM_ARRAY_TASK_ID") or (str(chunk_id) if chunk_id is not None else "0")
+def get_scratch_input_path():
+    job_id = os.environ.get("SLURM_JOB_ID")
 
-    scratch_base = "/scratch" if os.path.exists("/scratch") else "./scratch"
-    scratch_path = os.path.join(scratch_base, f"{job_id}_{task_id}")
-    os.makedirs(scratch_path, exist_ok=True)
-    return scratch_path
+    if not job_id:
+        raise RuntimeError("job not correctly started")
+
+
+    scratch_input_path = os.environ.get('INPUT_DIR')
+
+    os.makedirs(scratch_input_path, exist_ok=True)
+
+    return scratch_input_path
 
 
 # --- HELPER: STAGE FILES TO NVME SCRATCH ---
@@ -50,37 +50,30 @@ def copy_input_to_scratch(inferred_dict: dict, scratch_path: str, source_folder:
     needed_files = set()
     for mix_list in inferred_dict.values():
         for filename in mix_list.keys():
-            needed_files.add(str(filename).replace(".npy", ".wav"))
+            correct_filename = os.path.splitext(filename)[0] + ".wav"
+            needed_files.add(correct_filename)
 
-    copied, skipped = 0, 0
+    copied = 0
     for f in needed_files:
-        src = os.path.join(source_folder, f)
-        dst = os.path.join(scratch_path, f)
+        try:
+            shutil.copy(os.path.join(source_folder, f), scratch_path)
+            copied +=1
+        except Exception as e:
+            raise RuntimeError(f"something went wrong while copying to scratch: {e}") from e
 
-        if os.path.exists(dst):
-            continue  # Already staged
 
-        if os.path.exists(src):
-            try:
-                shutil.copy(src, dst)
-                copied += 1
-            except OSError as e:
-                print(f"⚠️ Warning: Could not copy {f} to scratch: {e}")
-        else:
-            skipped += 1
-
-    print(f"📦 Staged {copied} audio files to scratch ({skipped} not found in source).")
+    print(f"📦 Staged {copied} audio files to scratch.")
 
 
 # --- MODULE 1: THE SCORE-BASED MIXER (16 kHz Native) ---
 def intelligent_weighted_mix(
     audio_data: dict, 
     folder_path: str, 
-    num_audio_mix: int = 3, 
+    num_audio_mix: int, 
     sr: int = 16000, 
     weight_by: Literal["softmax_score", "cosine_sim"] = "softmax_score"
 ):
-    target_samples = 10 * sr  # Exactly 160,000 samples for AudioLDM 2 (10s @ 16kHz)
+    target_samples = int(10.24 * sr)  # Exactly 163,840 samples for AudioLDM 2 (10.24s @ 16kHz)
     final_mix = torch.zeros((1, target_samples))
 
     for filename, scores in list(audio_data.items())[:num_audio_mix]:
@@ -88,6 +81,7 @@ def intelligent_weighted_mix(
         path = os.path.join(folder_path, actual_wav_name)
         
         if not os.path.exists(path):
+            print(f"⚠️ Warning: {actual_wav_name} not found in folder. Skipping.")
             continue
 
         try:
@@ -145,7 +139,8 @@ def wav_to_vae_latents(
 
     # 2. Log-compression
     log_mel_spec = torch.log(torch.clamp(mel_spec, min=1e-5))
-
+    log_mel_spec = log_mel_spec[:, :, :1024]
+    
     # 3. Shape to [batch, 1, time_steps, 64] for VAE encoder
     log_mel_spec = log_mel_spec.transpose(1, 2).unsqueeze(1).to(dtype=vae.dtype)
 
@@ -244,7 +239,7 @@ def run_audioldm2_audio2audio(
         init_timestep = min(int(num_inference_steps * strength), num_inference_steps)
         t_start_idx = max(num_inference_steps - init_timestep, 0)
         timesteps_to_use = timesteps[t_start_idx:]
-        start_timestep = timesteps_to_use[0:1]
+        start_timestep = timesteps_to_use[0].repeat(curr_batch_size)
 
         with torch.no_grad():
             # 3. Encode Prompts
@@ -265,6 +260,8 @@ def run_audioldm2_audio2audio(
             noise = torch.randn_like(init_latents)
             latents = pipe.scheduler.add_noise(init_latents, noise, start_timestep)
 
+            if hasattr(pipe.scheduler, "set_begin_index"):
+                pipe.scheduler.set_begin_index(t_start_idx)
             # 6. Batched Denoising Loop
             for t in timesteps_to_use:
                 latent_model_input = torch.cat([latents] * 2) if active_guidance > 1.0 else latents
@@ -329,12 +326,13 @@ if __name__ == "__main__":
         chunk_data = json.load(f)
 
     # 1. Setup isolated scratch directory for this task
-    scratch_dir = os.environ.get("OUTPUT_DIR", get_scratch_path(chunk_id=args.chunk_id))
-    os.makedirs(scratch_dir, exist_ok=True)
-    print(f"📂 Working scratch directory: {scratch_dir}")
+    scratch_input_dir = os.environ.get('INPUT_DIR')
+    scratch_output_dir = os.environ.get('OUTPUT_DIR')
+    os.makedirs(scratch_input_dir, exist_ok=True)
+    print(f"📂 Working scratch directory: {scratch_input_dir}")
 
     # 2. Stage audio files to scratch
-    copy_input_to_scratch(chunk_data, scratch_dir, source_folder=TCML_INPUT_FOLDER)
+    copy_input_to_scratch(chunk_data, scratch_input_dir, source_folder=TCML_INPUT_FOLDER)
 
     # 3. Load descriptions if enabled
     def load_vggsound():
@@ -376,8 +374,8 @@ if __name__ == "__main__":
     generated_audio = run_audioldm2_audio2audio(
         pipe=pipe,
         inferred_dict=chunk_data,
-        scratch_input_folder=scratch_dir,
-        scratch_output_folder=scratch_dir,
+        scratch_input_folder=scratch_input_dir,
+        scratch_output_folder=scratch_output_dir,
         descriptions=vggsound_lookup,
         negative_prompt=conf.get("negative_prompt", "low quality, distorted, noisy, glitch"),
         strength=conf.get("strength", 0.45),

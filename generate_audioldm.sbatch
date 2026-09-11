@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=AudioLDM2_Array_Sherkat
 #SBATCH --partition=day
-#SBATCH --gres=gpu:2080ti:1          # Requesting 2080 Ti
+#SBATCH --gres=gpu:1080:1          # Requesting 2080 Ti
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
 #SBATCH --time=10:30:00
@@ -19,13 +19,20 @@ BASE_RESULT_DIR="$HOME/audioLDM2_generation_outputs"
 
 # --- 2. Setup Scratch & Cache Environments ---
 # Unique scratch per task to prevent any node collisions
-export OUTPUT_DIR="/scratch/${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}"
+SCRATCH_DIR="/scratch/${SLURM_JOB_ID}"
+export INPUT_DIR="$SCRATCH_DIR/input"
+export OUTPUT_DIR="$SCRATCH_DIR/output"
 export HF_HOME="$HOME/.cache/huggingface"
 export TORCH_HOME="$HOME/.cache/torch_models"
 
+mkdir -p "$INPUT_DIR"
 mkdir -p "$OUTPUT_DIR"
 mkdir -p "$HF_HOME"
 mkdir -p "$TORCH_HOME"
+
+
+# Guaranteed cleanup on exit (normal, error, or killed)
+trap 'echo "Removing scratch folder $SCRATCH_DIR"; rm -rf "$SCRATCH_DIR"' EXIT
 
 # --- 3. Execute Script inside Singularity Container ---
 singularity exec --nv \
@@ -42,6 +49,8 @@ singularity exec --nv \
 # --- 4. Move Results from Scratch to Home Storage ---
 echo "Moving results from local scratch to home storage..."
 TASK_DEST_DIR="$BASE_RESULT_DIR/${SESSION_ID}/task_${SLURM_ARRAY_TASK_ID}"
+readonly TASK_DEST_DIR
+rm -rf "$TASK_DEST_DIR"
 mkdir -p "$TASK_DEST_DIR"
 
 if ls "$OUTPUT_DIR"/*_GEN.wav "$OUTPUT_DIR"/*_RAW_MIX.wav >/dev/null 2>&1; then
@@ -53,11 +62,7 @@ if ls "$OUTPUT_DIR"/*_GEN.wav "$OUTPUT_DIR"/*_RAW_MIX.wav >/dev/null 2>&1; then
     touch "$BASE_RESULT_DIR/${SESSION_ID}/DONE_${SLURM_ARRAY_TASK_ID}"
     echo "✅ Task $SLURM_ARRAY_TASK_ID Complete. Saved to: $TASK_DEST_DIR"
     
-    # Clean up local scratch to free NVMe disk space
-    rm -rf "$OUTPUT_DIR"
 else
     echo "❌ Error: No generated audio files found in $OUTPUT_DIR for Task $SLURM_ARRAY_TASK_ID"
-    # Still clean up scratch if failed
-    rm -rf "$OUTPUT_DIR"
     exit 1
 fi
