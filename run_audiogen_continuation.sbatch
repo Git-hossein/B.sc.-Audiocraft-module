@@ -26,7 +26,7 @@ mkdir -p $OUTPUT_DIR
 
 
 # Guaranteed cleanup on exit (normal, error, or killed)
-trap 'echo "Removing scratch folder $SCRATCH_DIR"; rm -rf "$SCRATCH_DIR"' EXIT
+trap 'echo "Removing contents of scratch folder $SCRATCH_DIR"; rm -rf "${SCRATCH_DIR:?}/"*' EXIT
 
 # --- 3. Execute Script inside Singularity ---
 # Removed 'source' because libraries are now INSIDE the .simg

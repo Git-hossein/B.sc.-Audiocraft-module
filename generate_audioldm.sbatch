@@ -1,7 +1,8 @@
 #!/bin/bash
 #SBATCH --job-name=AudioLDM2_Array_Sherkat
 #SBATCH --partition=day
-#SBATCH --gres=gpu:1080:1          # Requesting 2080 Ti
+#SBATCH --gres=gpu:1          # Requesting 2080 Ti
+#SBATCH --exclude=tcml-node[1-2,5-13,16-17,20-36]
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
 #SBATCH --time=10:30:00
@@ -32,7 +33,7 @@ mkdir -p "$TORCH_HOME"
 
 
 # Guaranteed cleanup on exit (normal, error, or killed)
-trap 'echo "Removing scratch folder $SCRATCH_DIR"; rm -rf "$SCRATCH_DIR"' EXIT
+trap 'echo "Removing contents of scratch folder $SCRATCH_DIR"; rm -rf "${SCRATCH_DIR:?}/"*' EXIT
 
 # --- 3. Execute Script inside Singularity Container ---
 singularity exec --nv \
