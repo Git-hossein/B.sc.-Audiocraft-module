@@ -71,7 +71,7 @@ def intelligent_weighted_mix(
     folder_path: str, 
     num_audio_mix: int, 
     sr: int = 16000, 
-    weight_by: Literal["softmax_score", "cosine_sim"] = "softmax_score"
+    weight_by: Literal["softmax_score", "re_softmax_score"] = "re_softmax_score"
 ):
     target_samples = int(10.24 * sr)  # Exactly 163,840 samples for AudioLDM 2 (10.24s @ 16kHz)
     final_mix = torch.zeros((1, target_samples))

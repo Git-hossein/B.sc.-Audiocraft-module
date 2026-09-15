@@ -56,7 +56,7 @@ def copy_input_to_scratch(inferred_dict, scratch_path ,source_folder = "/home/sh
 
 
 # --- MODULE 1: THE SCORE-BASED MIXER ---
-def intelligent_weighted_mix(audio_data, folder_path, num_audio_mix, sr=16000, weight_by: Literal["softmax_score", "cosine_sim"] = "softmax_score"):
+def intelligent_weighted_mix(audio_data, folder_path, num_audio_mix, sr=16000, weight_by: Literal["softmax_score", "re_softmax_score"] = "re_softmax_score"):
     """
     audio_data: The dict of {filename: score}
     folder_path: Path to input waves
