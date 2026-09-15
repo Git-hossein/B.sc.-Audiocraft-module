@@ -292,11 +292,15 @@ def run_audioldm2_audio2audio(
             init_latents = wav_to_vae_latents(
                 batch_audio_tensor, pipe.vae, feature_extractor=feature_extractor, device=device
             )
-
+            init_latents = init_latents.to(dtype=pipe.unet.dtype)
             # Add Noise Matching the Starting Timestep
             latent_timestep = timesteps_to_use[0:1].repeat(curr_batch_size)
             noise = torch.randn_like(init_latents)
             latents = pipe.scheduler.add_noise(init_latents, noise, latent_timestep)
+            latents = latents.to(dtype=pipe.unet.dtype)
+
+            prompt_embeds = prompt_embeds.to(dtype=pipe.unet.dtype)
+            gen_prompt_embeds = gen_prompt_embeds.to(dtype=pipe.unet.dtype)
 
             # Inform scheduler of starting index
             if hasattr(pipe.scheduler, "set_begin_index"):
@@ -308,6 +312,7 @@ def run_audioldm2_audio2audio(
             for t in timesteps_to_use:
                 latent_model_input = torch.cat([latents] * 2) if active_guidance > 1.0 else latents
                 latent_model_input = pipe.scheduler.scale_model_input(latent_model_input, t)
+                latent_model_input = latent_model_input.to(dtype=pipe.unet.dtype)
 
                 noise_pred = pipe.unet(
                     latent_model_input,
