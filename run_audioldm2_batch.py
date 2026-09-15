@@ -338,7 +338,7 @@ def run_audioldm2_audio2audio(
         target_len = int(10 * sr)
         for j, video_id in enumerate(batch_video_ids):
             out_path = os.path.join(scratch_output_folder, f"{video_id}_GEN.wav")
-            audio_track = output_audio[j].squeeze()[:target_len]
+            audio_track = output_audio[j].squeeze() #[:target_len]
             audio_track = np.clip(audio_track, -1.0, 1.0)
             sf.write(out_path, audio_track, sr, subtype="PCM_16")
             print(f"✅ [{video_id}] Saved: {out_path}")
