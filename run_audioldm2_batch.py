@@ -9,7 +9,7 @@ import csv
 import argparse
 import json
 import shutil
-from diffusers import AudioLDM2Pipeline
+from diffusers import AudioLDM2Pipeline, DDIMScheduler
 
 # --- MONKEY PATCH FOR TRANSFORMERS / AUDIOLDM2 ---
 from transformers.models.gpt2.modeling_gpt2 import GPT2Model
@@ -124,7 +124,7 @@ def wav_to_vae_latents(
     device: str = "cuda"
 ):
     """
-    Computes the exact log-mel spectrogram (16kHz, 64 mel bins, hop 160)
+    Computes the standardized log-mel spectrogram (16kHz, 64 mel bins, hop 160)
     expected by AudioLDM / AudioLDM 2 VAE.
     """
     if waveform.dim() == 1:
@@ -141,12 +141,18 @@ def wav_to_vae_latents(
     log_mel_spec = torch.log(torch.clamp(mel_spec, min=1e-5))
     log_mel_spec = log_mel_spec[:, :, :1024]
     
-    # 3. Shape to [batch, 1, time_steps, 64] for VAE encoder
+    # 3. AudioLDM Dataset Standardization (mean: -4.63, std: 2.74)
+    log_mel_spec = (log_mel_spec - (-4.63)) / 2.74
+    
+    # 4. Shape to [batch, 1, time_steps, 64] for VAE encoder
     log_mel_spec = log_mel_spec.transpose(1, 2).unsqueeze(1).to(dtype=vae.dtype)
 
-    # 4. VAE Encode
+    # 5. VAE Encode
     init_latents = vae.encode(log_mel_spec).latent_dist.sample()
     init_latents = init_latents * vae.config.scaling_factor
+    
+    # Clip extreme latent outliers as done in official AudioLDM
+    init_latents = torch.clamp(init_latents, min=-10.0, max=10.0)
     return init_latents
 
 
@@ -162,7 +168,7 @@ def run_audioldm2_audio2audio(
     num_inference_steps: int = 100,
     guidance_scale: float = 3.5,
     num_audio_mix: int = 3,
-    weight_by: Literal["softmax_score", "cosine_sim"] = "softmax_score",
+    weight_by: Literal["softmax_score", "re_softmax_score", "cosine_sim"] = "re_softmax_score",
     batch_size: int = 4,
     sr: int = 16000,
     device: str = "cuda"
@@ -170,6 +176,10 @@ def run_audioldm2_audio2audio(
     os.makedirs(scratch_output_folder, exist_ok=True)
     generated_files = []
     
+    # Swap to DDIMScheduler for reliable intermediate-step scheduling (order = 1)
+    if not isinstance(pipe.scheduler, DDIMScheduler):
+        pipe.scheduler = DDIMScheduler.from_config(pipe.scheduler.config)
+
     # Pre-allocate MelSpectrogram on GPU once
     mel_transform = T.MelSpectrogram(
         sample_rate=sr,
@@ -226,23 +236,30 @@ def run_audioldm2_audio2audio(
                 prompt_text = ""
             batch_prompts.append(prompt_text)
 
-        # Stack waveforms into [B, 160000]
+        # Stack waveforms into [B, 163840]
         batch_audio_tensor = torch.stack(batch_waveforms).to(device)
 
         # 2. Text Conditioning Logic
         has_text = any(len(p.strip()) > 0 for p in batch_prompts)
         active_guidance = guidance_scale if (has_text and guidance_scale > 1.0) else 1.0
 
-        # Reset scheduler for every mini-batch
+        # 3. Compute Schedule Matching Stable Diffusion Img2Img Pipeline
         pipe.scheduler.set_timesteps(num_inference_steps, device=device)
-        timesteps = pipe.scheduler.timesteps
+        
         init_timestep = min(int(num_inference_steps * strength), num_inference_steps)
-        t_start_idx = max(num_inference_steps - init_timestep, 0)
-        timesteps_to_use = timesteps[t_start_idx:]
-        start_timestep = timesteps_to_use[0].repeat(curr_batch_size)
+        t_start = max(num_inference_steps - init_timestep, 0)
+        
+        offset = t_start * pipe.scheduler.order
+        timesteps_to_use = pipe.scheduler.timesteps[offset:]
+
+        if hasattr(pipe.scheduler, "set_begin_index"):
+            pipe.scheduler.set_begin_index(offset)
+
+        # Timestep corresponding to the initial noise added
+        start_timestep = timesteps_to_use[:1].repeat(curr_batch_size)
 
         with torch.no_grad():
-            # 3. Encode Prompts
+            # 4. Encode Prompts
             prompt_embeds, prompt_mask, gen_prompt_embeds = pipe.encode_prompt(
                 prompt=batch_prompts,
                 device=device,
@@ -251,18 +268,16 @@ def run_audioldm2_audio2audio(
                 negative_prompt=[negative_prompt] * curr_batch_size if active_guidance > 1.0 else None,
             )
 
-            # 4. Encode Batched 16kHz Audio into VAE Latents
+            # 5. Encode Batched 16kHz Audio into Standardized VAE Latents
             init_latents = wav_to_vae_latents(
                 batch_audio_tensor, pipe.vae, mel_transform=mel_transform, device=device
             )
 
-            # 5. Add Noise matching start_timestep
+            # 6. Inject Noise matching start_timestep
             noise = torch.randn_like(init_latents)
             latents = pipe.scheduler.add_noise(init_latents, noise, start_timestep)
 
-            if hasattr(pipe.scheduler, "set_begin_index"):
-                pipe.scheduler.set_begin_index(t_start_idx)
-            # 6. Batched Denoising Loop
+            # 7. Batched Denoising Loop
             for t in timesteps_to_use:
                 latent_model_input = torch.cat([latents] * 2) if active_guidance > 1.0 else latents
                 latent_model_input = pipe.scheduler.scale_model_input(latent_model_input, t)
@@ -282,7 +297,7 @@ def run_audioldm2_audio2audio(
 
                 latents = pipe.scheduler.step(noise_pred, t, latents, **extra_step_kwargs, return_dict=False)[0]
 
-            # 7. Decode Batched Latents -> Mel Spectrogram -> HiFi-GAN Vocoder
+            # 8. Decode Latents -> Mel Spectrogram -> HiFi-GAN Vocoder
             latents = latents / pipe.vae.config.scaling_factor
             mel_spectrogram = pipe.vae.decode(latents).sample
 
@@ -292,7 +307,7 @@ def run_audioldm2_audio2audio(
             output_audio = pipe.vocoder(mel_spectrogram)  # Shape: [B, samples] or [B, 1, samples]
             output_audio = output_audio.cpu().float().numpy()
 
-        # 8. Save Generated Master Waveforms
+        # 9. Save Master Waveforms
         target_len = int(10 * sr)
         for j, video_id in enumerate(batch_video_ids):
             out_path = os.path.join(scratch_output_folder, f"{video_id}_GEN.wav")
@@ -303,7 +318,6 @@ def run_audioldm2_audio2audio(
             generated_files.append(out_path)
 
     return generated_files
-
 
 # --- MAIN EXECUTION ---
 if __name__ == "__main__":
