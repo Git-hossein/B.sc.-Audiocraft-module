@@ -9,6 +9,8 @@ import csv
 import argparse
 import json
 import shutil
+import librosa
+import torch.nn.functional as F
 from diffusers import AudioLDM2Pipeline
 
 # --- MONKEY PATCH FOR TRANSFORMERS / AUDIOLDM2 ---
@@ -117,34 +119,82 @@ def intelligent_weighted_mix(
 
 
 # --- MODULE 2: 16kHz VAE MEL-SPECTROGRAM CONVERSION ---
-def wav_to_vae_latents(
-    waveform: torch.Tensor, 
-    vae, 
-    mel_transform: T.MelSpectrogram, 
-    device: str = "cuda"
-):
-    """
-    Computes the exact log-mel spectrogram (16kHz, 64 mel bins, hop 160)
-    expected by AudioLDM / AudioLDM 2 VAE.
-    """
+class AudioLDM2FeatureExtractor(torch.nn.Module):
+    def __init__(
+        self,
+        sample_rate: int = 16000,
+        n_fft: int = 1024,
+        hop_length: int = 160,
+        win_length: int = 1024,
+        n_mels: int = 64,
+        f_min: float = 0.0,
+        f_max: float = 8000.0,
+    ):
+        super().__init__()
+        self.n_fft = n_fft
+        self.hop_length = hop_length
+        self.win_length = win_length
+        
+        # Exact Hann window
+        window = torch.hann_window(win_length)
+        self.register_buffer("window", window)
+
+        # Exact Librosa mel filterbank matching author's TacotronSTFT
+        mel_basis = librosa.filters.mel(
+            sr=sample_rate,
+            n_fft=n_fft,
+            n_mels=n_mels,
+            fmin=f_min,
+            fmax=f_max
+        )
+        self.register_buffer("mel_basis", torch.from_numpy(mel_basis).float())
+
+    def forward(self, waveform: torch.Tensor) -> torch.Tensor:
+        # 1. Remove DC offset and peak-scale to 0.5 matching tools.py
+        waveform = waveform - torch.mean(waveform, dim=-1, keepdim=True)
+        max_val = torch.max(torch.abs(waveform), dim=-1, keepdim=True)[0] + 1e-8
+        waveform = (waveform / max_val) * 0.5
+
+        # 2. Reflect pad matching author's STFT class
+        pad_amount = int(self.n_fft // 2)
+        waveform = F.pad(waveform.unsqueeze(1), (pad_amount, pad_amount), mode="reflect").squeeze(1)
+
+        # 3. STFT
+        stft_res = torch.stft(
+            waveform,
+            n_fft=self.n_fft,
+            hop_length=self.hop_length,
+            win_length=self.win_length,
+            window=self.window,
+            center=False,
+            return_complex=True,
+        )
+        magnitudes = torch.abs(stft_res)
+
+        # 4. Mel Matrix Multiplication & Dynamic Range Compression
+        mel_output = torch.matmul(self.mel_basis, magnitudes)
+        log_mel_spec = torch.log(torch.clamp(mel_output, min=1e-5))
+
+        # 5. Crop / Pad exactly to 1024 time frames
+        if log_mel_spec.shape[-1] > 1024:
+            log_mel_spec = log_mel_spec[:, :, :1024]
+        elif log_mel_spec.shape[-1] < 1024:
+            log_mel_spec = F.pad(log_mel_spec, (0, 1024 - log_mel_spec.shape[-1]))
+
+        # Shape to [B, 1, 1024, 64] expected by the VAE encoder
+        log_mel_spec = log_mel_spec.transpose(1, 2).unsqueeze(1)
+        return log_mel_spec
+
+
+def wav_to_vae_latents(waveform: torch.Tensor, vae, feature_extractor, device: str = "cuda"):
     if waveform.dim() == 1:
         waveform = waveform.unsqueeze(0)
     elif waveform.dim() == 3:
         waveform = waveform.squeeze(1)
 
     waveform = waveform.to(device)
+    log_mel_spec = feature_extractor(waveform).to(dtype=vae.dtype)
 
-    # 1. Extract Mel Spectrogram -> [batch, 64, time_steps]
-    mel_spec = mel_transform(waveform)
-
-    # 2. Log-compression
-    log_mel_spec = torch.log(torch.clamp(mel_spec, min=1e-5))
-    log_mel_spec = log_mel_spec[:, :, :1024]
-    
-    # 3. Shape to [batch, 1, time_steps, 64] for VAE encoder
-    log_mel_spec = log_mel_spec.transpose(1, 2).unsqueeze(1).to(dtype=vae.dtype)
-
-    # 4. VAE Encode
     init_latents = vae.encode(log_mel_spec).latent_dist.sample()
     init_latents = init_latents * vae.config.scaling_factor
     return init_latents
@@ -160,7 +210,7 @@ def run_audioldm2_audio2audio(
     negative_prompt: str = "low quality, distorted, noisy, glitch",
     strength: float = 0.45,
     num_inference_steps: int = 100,
-    guidance_scale: float = 1.0,  # Set to 1.0 to prevent CFG blowing up without text
+    guidance_scale: float = 3.5,  # 3.5 default works well now that text guidance is conditioned
     num_audio_mix: int = 3,
     weight_by: Literal["softmax_score", "cosine_sim"] = "softmax_score",
     batch_size: int = 4,
@@ -170,19 +220,8 @@ def run_audioldm2_audio2audio(
     os.makedirs(scratch_output_folder, exist_ok=True)
     generated_files = []
     
-    # Pre-allocate MelSpectrogram on GPU once
-    mel_transform = T.MelSpectrogram(
-        sample_rate=sr,
-        n_fft=1024,
-        win_length=1024,
-        hop_length=160,
-        f_min=0,
-        f_max=8000,
-        n_mels=64,
-        power=1.0,
-        norm="slaney",
-        mel_scale="slaney",
-    ).to(device)
+    # 1. Instantiate the Author's Exact Feature Extractor on GPU
+    feature_extractor = AudioLDM2FeatureExtractor(sample_rate=sr).to(device)
 
     extra_step_kwargs = pipe.prepare_extra_step_kwargs(None, 0.0)
 
@@ -200,7 +239,7 @@ def run_audioldm2_audio2audio(
         batch_video_ids = []
         batch_prompts = []
 
-        # 1. Mix Audio for each query in mini-batch
+        # Mix Audio for each query in mini-batch
         for query_key in batch_keys:
             video_id = os.path.splitext(query_key)[0]
             candidates_dict = inferred_dict[query_key]
@@ -229,18 +268,18 @@ def run_audioldm2_audio2audio(
         # Stack waveforms into [B, 160000]
         batch_audio_tensor = torch.stack(batch_waveforms).to(device)
 
-        # 2. Text Conditioning Logic
+        # Text Conditioning Logic
         has_text = any(len(p.strip()) > 0 for p in batch_prompts)
         active_guidance = guidance_scale if (has_text and guidance_scale > 1.0) else 1.0
 
-        # 3. Configure Timesteps for Audio-to-Audio (SDEdit)
+        # Configure Timesteps for Audio-to-Audio (SDEdit)
         pipe.scheduler.set_timesteps(num_inference_steps, device=device)
         init_timestep = int(num_inference_steps * strength)
         t_start = max(num_inference_steps - init_timestep, 0)
         timesteps_to_use = pipe.scheduler.timesteps[t_start:]
 
         with torch.no_grad():
-            # 4. Encode Prompts
+            # Encode Prompts
             prompt_embeds, prompt_mask, gen_prompt_embeds = pipe.encode_prompt(
                 prompt=batch_prompts,
                 device=device,
@@ -249,23 +288,23 @@ def run_audioldm2_audio2audio(
                 negative_prompt=[negative_prompt] * curr_batch_size if active_guidance > 1.0 else None,
             )
 
-            # 5. Encode Audio into VAE Latents
+            # Encode Audio into VAE Latents with matched feature extractor
             init_latents = wav_to_vae_latents(
-                batch_audio_tensor, pipe.vae, mel_transform=mel_transform, device=device
+                batch_audio_tensor, pipe.vae, feature_extractor=feature_extractor, device=device
             )
 
-            # 6. Add Noise Matching the Starting Timestep
+            # Add Noise Matching the Starting Timestep
             latent_timestep = timesteps_to_use[0:1].repeat(curr_batch_size)
             noise = torch.randn_like(init_latents)
             latents = pipe.scheduler.add_noise(init_latents, noise, latent_timestep)
 
-            # Inform scheduler of starting index (crucial for DPMSolver and similar schedulers)
+            # Inform scheduler of starting index
             if hasattr(pipe.scheduler, "set_begin_index"):
                 pipe.scheduler.set_begin_index(t_start)
             elif hasattr(pipe.scheduler, "_step_index"):
                 pipe.scheduler._step_index = t_start
 
-            # 7. Batched Denoising Loop
+            # Batched Denoising Loop
             for t in timesteps_to_use:
                 latent_model_input = torch.cat([latents] * 2) if active_guidance > 1.0 else latents
                 latent_model_input = pipe.scheduler.scale_model_input(latent_model_input, t)
@@ -285,7 +324,7 @@ def run_audioldm2_audio2audio(
 
                 latents = pipe.scheduler.step(noise_pred, t, latents, **extra_step_kwargs, return_dict=False)[0]
 
-            # 8. Decode Latents -> Mel Spectrogram -> HiFi-GAN Vocoder
+            # Decode Latents -> Mel Spectrogram -> HiFi-GAN Vocoder
             latents = latents / pipe.vae.config.scaling_factor
             mel_spectrogram = pipe.vae.decode(latents).sample
 
@@ -295,7 +334,7 @@ def run_audioldm2_audio2audio(
             output_audio = pipe.vocoder(mel_spectrogram)
             output_audio = output_audio.cpu().float().numpy()
 
-        # 9. Save Generated Audio Files
+        # Save Generated Audio Files
         target_len = int(10 * sr)
         for j, video_id in enumerate(batch_video_ids):
             out_path = os.path.join(scratch_output_folder, f"{video_id}_GEN.wav")
