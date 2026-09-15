@@ -402,6 +402,20 @@ if __name__ == "__main__":
         "cvssp/audioldm2", 
         torch_dtype=torch.float16 if device == "cuda" else torch.float32
     ).to(device)
+    from transformers import GPT2LMHeadModel
+    # Explicitly load the correct language model class
+    language_model = GPT2LMHeadModel.from_pretrained(
+        "cvssp/audioldm2", 
+        subfolder="language_model"
+    )
+
+    # Pass it directly to the pipeline
+    pipe = AudioLDM2Pipeline.from_pretrained(
+        "cvssp/audioldm2", 
+        language_model=language_model,
+        torch_dtype=torch.float16 if device == "cuda" else torch.float32
+    ).to(device)
+
 
     if device == "cuda":
         gpu_name = torch.cuda.get_device_name(0)
