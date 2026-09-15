@@ -262,7 +262,7 @@ def run_audioldm2_audio2audio(
             if descriptions is not None:
                 prompt_text = descriptions.get(video_id, descriptions.get(query_key, ""))
             else:
-                prompt_text = ""
+                prompt_text = "high quality sound"
             batch_prompts.append(prompt_text)
 
         # Stack waveforms into [B, 160000]
