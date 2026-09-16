@@ -1,14 +1,14 @@
 #!/bin/bash
 #SBATCH --job-name=AudioLDM2_Array_Sherkat
 #SBATCH --partition=day
-#SBATCH --gres=gpu:1          # Requesting 2080 Ti
+#SBATCH --gres=gpu:1          # Requesting 2080 or A4000 Ti
 #SBATCH --exclude=tcml-node[1-2,5-13,16-17,20-36]
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
 #SBATCH --time=10:30:00
 #SBATCH --array=0-0                 # Set to your total chunks, e.g., 0-19 for 20 chunks
-#SBATCH --error=job.%A_%a.err        # %A is Job ID, %a is Task Index
-#SBATCH --output=job.%A_%a.out
+#SBATCH --error=job.audioldm2_A2A.%A_%a.err        # %A is Job ID, %a is Task Index
+#SBATCH --output=job.audioldm2_A2A.%A_%a.out
 #SBATCH --mail-type=FAIL
 #SBATCH --mail-user=hossein.sherkat@student.uni-tuebingen.de
 
@@ -42,7 +42,7 @@ singularity exec --nv \
     "$IMAGE" bash -c "
         cd $PROJECT_ROOT && \
         nvidia-smi && \
-        python3 -u run_audioldm2_batch.py \
+        python3 -u run_audioldm2_audio2audio.py \
             --session_id '$SESSION_ID' \
             --chunk_id '$SLURM_ARRAY_TASK_ID'
 "
