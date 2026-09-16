@@ -145,16 +145,17 @@ if __name__ == "__main__":
     # 6. LOAD PIPELINE
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"🤖 Loading AudioLDM 2 pipeline on {device}...")
-    
+    dtype = torch.float16 if device == "cuda" else torch.float32
     language_model = GPT2LMHeadModel.from_pretrained(
         "cvssp/audioldm2", 
-        subfolder="language_model"
+        subfolder="language_model",
+        torch_dtype=dtype
     )
 
     pipe = AudioLDM2Pipeline.from_pretrained(
         "cvssp/audioldm2", 
         language_model=language_model,
-        torch_dtype=torch.float16 if device == "cuda" else torch.float32
+        torch_dtype=dtype
     ).to(device)
 
     if device == "cuda":
