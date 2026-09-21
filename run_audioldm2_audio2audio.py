@@ -269,8 +269,7 @@ def run_audioldm2_audio2audio(
         batch_audio_tensor = torch.stack(batch_waveforms).to(device)
 
         # Text Conditioning Logic
-        has_text = any(len(p.strip()) > 0 for p in batch_prompts)
-        active_guidance = guidance_scale if (has_text and guidance_scale > 1.0) else 1.0
+        active_guidance = guidance_scale if (descriptions is not None and guidance_scale > 1.0) else 1.0
 
         # Configure Timesteps for Audio-to-Audio (SDEdit)
         pipe.scheduler.set_timesteps(num_inference_steps, device=device)
